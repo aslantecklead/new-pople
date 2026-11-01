@@ -23,6 +23,7 @@ await db.query('ALTER TABLE render_jobs ADD COLUMN IF NOT EXISTS output_path TEX
 await db.query('ALTER TABLE assets ADD COLUMN IF NOT EXISTS source_provider TEXT');
 await db.query('ALTER TABLE assets ADD COLUMN IF NOT EXISTS source_url TEXT');
 await db.query('ALTER TABLE assets ADD COLUMN IF NOT EXISTS source_author TEXT');
+await db.query('ALTER TABLE assets ADD COLUMN IF NOT EXISTS source_license TEXT');
 await db.query(`CREATE TABLE IF NOT EXISTS project_assets (
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   asset_id UUID NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
@@ -34,8 +35,8 @@ app.get('/health', async () => ({
   ok: true,
   service: 'news-video-factory',
   stockSearch: {
+    wikimediaCommons: process.env.WIKIMEDIA_COMMONS_ENABLED !== 'false',
     pexels: Boolean(process.env.PEXELS_API_KEY),
-    pixabay: Boolean(process.env.PIXABAY_API_KEY),
     localStoryboardModel: Boolean(process.env.OLLAMA_BASE_URL && process.env.OLLAMA_MODEL),
   },
 }));

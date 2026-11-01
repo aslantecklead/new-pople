@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS assets (
   source_provider TEXT,
   source_url TEXT,
   source_author TEXT,
+  source_license TEXT,
   embedding vector(768),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

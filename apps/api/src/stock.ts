@@ -8,16 +8,25 @@ import { Pool } from 'pg';
 
 type StockAsset = {
   downloadUrl: string;
-  extension: '.mp4' | '.jpg';
-  mimeType: 'video/mp4' | 'image/jpeg';
+  extension: string;
+  mimeType: string;
   originalName: string;
-  sourceProvider: 'pexels' | 'pixabay';
+  sourceProvider: 'pexels' | 'wikimedia-commons';
   sourceUrl: string;
   sourceAuthor?: string;
+  sourceLicense?: string;
   tags: string[];
 };
 
 type Scene = { query: string; kind: 'video' | 'photo' };
+type CommonsImageInfo = {
+  url?: string;
+  thumburl?: string;
+  mime?: string;
+  descriptionurl?: string;
+  extmetadata?: { LicenseShortName?: { value?: string }; Artist?: { value?: string } };
+};
+type CommonsPage = { title: string; imageinfo?: CommonsImageInfo[] };
 
 function fallbackScenes(text: string): Scene[] {
   const sentences = text.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/).map((value) => value.trim()).filter(Boolean);
@@ -71,23 +80,46 @@ async function findOnPexels(scene: Scene): Promise<StockAsset | undefined> {
   if (scene.kind === 'photo') {
     const photo = data.photos?.[0];
     const downloadUrl = photo?.src.large2x ?? photo?.src.large;
-    return photo && downloadUrl ? { downloadUrl, extension: '.jpg', mimeType: 'image/jpeg', originalName: `pexels-${photo.id}.jpg`, sourceProvider: 'pexels', sourceUrl: photo.url, sourceAuthor: photo.photographer, tags: [scene.query] } : undefined;
+    return photo && downloadUrl ? { downloadUrl, extension: '.jpg', mimeType: 'image/jpeg', originalName: `pexels-${photo.id}.jpg`, sourceProvider: 'pexels', sourceUrl: photo.url, sourceAuthor: photo.photographer, sourceLicense: 'Pexels License', tags: [scene.query] } : undefined;
   }
   const video = data.videos?.[0];
   const file = video?.video_files?.filter((item) => item.file_type === 'video/mp4' && item.link).sort((a, b) => Math.abs((a.height ?? 0) - 1080) - Math.abs((b.height ?? 0) - 1080))[0];
-  return video && file?.link ? { downloadUrl: file.link, extension: '.mp4', mimeType: 'video/mp4', originalName: `pexels-${video.id}.mp4`, sourceProvider: 'pexels', sourceUrl: video.url, sourceAuthor: video.user?.name, tags: [scene.query] } : undefined;
+  return video && file?.link ? { downloadUrl: file.link, extension: '.mp4', mimeType: 'video/mp4', originalName: `pexels-${video.id}.mp4`, sourceProvider: 'pexels', sourceUrl: video.url, sourceAuthor: video.user?.name, sourceLicense: 'Pexels License', tags: [scene.query] } : undefined;
 }
 
-async function findOnPixabay(scene: Scene): Promise<StockAsset | undefined> {
-  const key = process.env.PIXABAY_API_KEY;
-  if (!key) return undefined;
-  const endpoint = scene.kind === 'photo' ? 'https://pixabay.com/api/' : 'https://pixabay.com/api/videos/';
-  const response = await fetch(`${endpoint}?key=${encodeURIComponent(key)}&q=${encodeURIComponent(scene.query)}&lang=ru&per_page=8&orientation=vertical&safesearch=true`, { signal: AbortSignal.timeout(20_000) });
+function plainText(value?: string) {
+  return value?.replace(/<[^>]*>/g, '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').trim();
+}
+
+async function findOnWikimediaCommons(scene: Scene): Promise<StockAsset | undefined> {
+  if (process.env.WIKIMEDIA_COMMONS_ENABLED === 'false') return undefined;
+  const filetype = scene.kind === 'photo' ? 'bitmap' : 'video';
+  const params = new URLSearchParams({
+    action: 'query', format: 'json', generator: 'search', gsrnamespace: '6', gsrlimit: '8',
+    gsrsearch: `${scene.query} filetype:${filetype}`, prop: 'imageinfo',
+    iiprop: 'url|mime|extmetadata', iiurlwidth: '1280', origin: '*',
+  });
+  const response = await fetch(`https://commons.wikimedia.org/w/api.php?${params}`, {
+    headers: { 'user-agent': process.env.WIKIMEDIA_USER_AGENT ?? 'NewsVideoFactory/0.1 (self-hosted local test)' },
+    signal: AbortSignal.timeout(20_000),
+  });
   if (!response.ok) return undefined;
-  const data = await response.json() as { hits?: Array<{ id: number; pageURL: string; user?: string; largeImageURL?: string; videos?: { medium?: { url?: string } } }> };
-  const item = data.hits?.[0];
-  const downloadUrl = scene.kind === 'photo' ? item?.largeImageURL : item?.videos?.medium?.url;
-  return item && downloadUrl ? { downloadUrl, extension: scene.kind === 'photo' ? '.jpg' : '.mp4', mimeType: scene.kind === 'photo' ? 'image/jpeg' : 'video/mp4', originalName: `pixabay-${item.id}${scene.kind === 'photo' ? '.jpg' : '.mp4'}`, sourceProvider: 'pixabay', sourceUrl: item.pageURL, sourceAuthor: item.user, tags: [scene.query] } : undefined;
+  const data = await response.json() as { query?: { pages?: Record<string, CommonsPage> } };
+  const infos = Object.values(data.query?.pages ?? {}).map((page) => ({ title: page.title, info: page.imageinfo?.[0] })).filter((item): item is { title: string; info: CommonsImageInfo } => Boolean(item.info?.url && item.info.mime));
+  const allowed = infos.find(({ info }) => {
+    const license = plainText(info.extmetadata?.LicenseShortName?.value)?.toUpperCase() ?? '';
+    return license.includes('PDM') || license.includes('PUBLIC DOMAIN') || license.includes('CC0') || (license.includes('CC BY') && !license.includes('SA'));
+  });
+  if (!allowed) return undefined;
+  const { info, title } = allowed;
+  const isImage = info.mime?.startsWith('image/');
+  const extension = isImage ? '.jpg' : info.mime === 'video/webm' ? '.webm' : info.mime === 'video/ogg' ? '.ogv' : '.mp4';
+  return {
+    downloadUrl: isImage ? info.thumburl ?? info.url! : info.url!, extension, mimeType: info.mime!,
+    originalName: title.replace(/^File:/, '').replace(/\s+/g, '-'), sourceProvider: 'wikimedia-commons',
+    sourceUrl: info.descriptionurl ?? `https://commons.wikimedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`,
+    sourceAuthor: plainText(info.extmetadata?.Artist?.value), sourceLicense: plainText(info.extmetadata?.LicenseShortName?.value), tags: [scene.query],
+  };
 }
 
 async function download(asset: StockAsset, projectId: string, mediaRoot: string, db: Pool) {
@@ -98,18 +130,18 @@ async function download(asset: StockAsset, projectId: string, mediaRoot: string,
   const fullPath = join(mediaRoot, objectKey);
   await mkdir(join(mediaRoot, 'stock', projectId), { recursive: true });
   await pipeline(Readable.fromWeb(response.body as never), createWriteStream(fullPath));
-  await db.query(`INSERT INTO assets (id, project_id, object_key, original_name, mime_type, tags, source_provider, source_url, source_author)
-    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9)`, [id, projectId, objectKey, asset.originalName, asset.mimeType, JSON.stringify(asset.tags), asset.sourceProvider, asset.sourceUrl, asset.sourceAuthor ?? null]);
+  await db.query(`INSERT INTO assets (id, project_id, object_key, original_name, mime_type, tags, source_provider, source_url, source_author, source_license)
+    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)`, [id, projectId, objectKey, asset.originalName, asset.mimeType, JSON.stringify(asset.tags), asset.sourceProvider, asset.sourceUrl, asset.sourceAuthor ?? null, asset.sourceLicense ?? null]);
   return { object_key: objectKey, mime_type: asset.mimeType };
 }
 
 export async function downloadAutomaticStock(text: string, projectId: string, mediaRoot: string, db: Pool) {
-  if (!process.env.PEXELS_API_KEY && !process.env.PIXABAY_API_KEY) return [];
+  if (process.env.WIKIMEDIA_COMMONS_ENABLED === 'false' && !process.env.PEXELS_API_KEY) return [];
   const scenes = await createStoryboard(text);
   const assets: Array<{ object_key: string; mime_type: string }> = [];
   for (const scene of scenes) {
     try {
-      const candidate = await findOnPexels(scene) ?? await findOnPixabay(scene);
+      const candidate = await findOnWikimediaCommons(scene) ?? await findOnPexels(scene);
       if (candidate) assets.push(await download(candidate, projectId, mediaRoot, db));
     } catch {
       // One unavailable source must not cancel the whole video; the next scene or local library can still render.
