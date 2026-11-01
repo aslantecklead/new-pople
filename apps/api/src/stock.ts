@@ -11,7 +11,7 @@ type StockAsset = {
   extension: string;
   mimeType: string;
   originalName: string;
-  sourceProvider: 'pexels' | 'wikimedia-commons' | 'nasa' | 'coverr';
+  sourceProvider: 'pexels' | 'wikimedia-commons' | 'nasa' | 'coverr' | 'google-images' | 'yandex-images' | 'pinterest' | 'vecteezy';
   sourceUrl: string;
   sourceAuthor?: string;
   sourceLicense?: string;
@@ -133,13 +133,36 @@ async function searchCoverr(scene: Scene): Promise<StockAsset[]> {
   const key = process.env.COVERR_API_KEY;
   if (!key) return [];
   const params = new URLSearchParams({ query: scene.query, page_size: '6', urls: 'true', sort: 'trending', filter: 'is_vertical:true' });
-  const response = await fetch(`https://api.coverr.co/videos?${params}`, { headers: { 'x-api-key': key }, signal: AbortSignal.timeout(20_000) });
+  const response = await fetch(`https://api.coverr.co/videos?${params}`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(20_000) });
   if (!response.ok) return [];
   const data = await response.json() as { hits?: Array<{ id?: string; title?: string; urls?: { mp4_download?: string; mp4_preview?: string; mp4?: string }; mp4_download?: string; thumbnail?: string }> };
   return (data.hits ?? []).flatMap((item) => {
     const url = item.urls?.mp4_download ?? item.urls?.mp4 ?? item.mp4_download;
     return url ? [{ downloadUrl: url, extension: '.mp4', mimeType: 'video/mp4', originalName: `coverr-${item.id ?? randomUUID()}.mp4`, sourceProvider: 'coverr' as const, sourceUrl: `https://coverr.co/videos/${item.id ?? ''}`, sourceLicense: 'Coverr License', tags: [scene.query] }] : [];
   });
+}
+
+function uniqueUrls(html: string, expression: RegExp) {
+  return [...new Set([...html.matchAll(expression)].map((match) => match[1].replace(/\\u002F/g, '/').replace(/\\/g, '').replace(/&amp;/g, '&')))].slice(0, 8);
+}
+
+async function scrapeSource(query: string, provider: StockAsset['sourceProvider'], url: string, expression: RegExp): Promise<StockAsset[]> {
+  try {
+    const response = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 NewsVideoFactory/0.1 local-test' }, signal: AbortSignal.timeout(20_000) });
+    if (!response.ok) return [];
+    return uniqueUrls(await response.text(), expression).map((downloadUrl, index) => ({ downloadUrl, extension: '.jpg', mimeType: 'image/jpeg', originalName: `${provider}-${index}.jpg`, sourceProvider: provider, sourceUrl: url, sourceLicense: 'Unverified external result — review before publishing', tags: [query] }));
+  } catch { return []; }
+}
+
+async function scrapePublicImages(query: string): Promise<StockAsset[]> {
+  const encoded = encodeURIComponent(query);
+  const [google, yandex, pinterest, vecteezy] = await Promise.all([
+    scrapeSource(query, 'google-images', `https://www.google.com/search?tbm=isch&q=${encoded}`, /(https?:\\?\/\\?encrypted-tbn[^"'\\ ]+)/g),
+    scrapeSource(query, 'yandex-images', `https://yandex.ru/images/search?text=${encoded}`, /"(?:preview|origin)":"(https?:\\?\/\\?[^" ]+\.(?:jpg|jpeg|png)[^" ]*)/gi),
+    scrapeSource(query, 'pinterest', `https://www.pinterest.com/search/pins/?q=${encoded}`, /(https?:\\?\/\\?i\.pinimg\.com[^"'\\ ]+)/g),
+    scrapeSource(query, 'vecteezy', `https://www.vecteezy.com/search?content_type=video&qterm=${encoded}`, /(https?:\\?\/\\?(?:static|cdn)\.vecteezy\.com[^"'\\ ]+\.(?:jpg|jpeg|png)[^"'\\ ]*)/gi),
+  ]);
+  return [...google, ...yandex, ...pinterest, ...vecteezy];
 }
 
 export async function downloadSelectedStock(asset: StockAsset, projectId: string, mediaRoot: string, db: Pool) {
@@ -177,7 +200,13 @@ export async function searchRemoteMedia(text: string) {
   const cached = searchCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.items;
   const scenes = await createStoryboard(text);
-  const found = (await Promise.all(scenes.map(async (scene) => (await searchCoverr(scene)).slice(0, 5).map((asset) => ({ scene, asset })))))
+  const names = [...new Set(text.match(/[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+/g) ?? [])].slice(0, 3);
+  const queries = [...scenes, ...names.map((query) => ({ query, kind: 'photo' as const }))];
+  const found = (await Promise.all(queries.map(async (scene) => {
+    const coverr = (await searchCoverr(scene)).slice(0, 5);
+    const images = (await scrapePublicImages(scene.query)).slice(0, 6);
+    return [...coverr, ...images].map((asset) => ({ scene, asset }));
+  })))
     .flat().slice(0, 20);
   const items = found.map(({ scene, asset }) => {
     const id = randomUUID();
