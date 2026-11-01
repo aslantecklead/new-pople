@@ -20,6 +20,9 @@ await app.register(cors, { origin: process.env.WEB_ORIGIN?.split(',') ?? true })
 await app.register(multipart, { limits: { fileSize: 1_500_000_000, files: 20 } });
 await app.register(fastifyStatic, { root: mediaRoot, prefix: '/media/' });
 await db.query('ALTER TABLE render_jobs ADD COLUMN IF NOT EXISTS output_path TEXT');
+await db.query('ALTER TABLE assets ADD COLUMN IF NOT EXISTS source_provider TEXT');
+await db.query('ALTER TABLE assets ADD COLUMN IF NOT EXISTS source_url TEXT');
+await db.query('ALTER TABLE assets ADD COLUMN IF NOT EXISTS source_author TEXT');
 await db.query(`CREATE TABLE IF NOT EXISTS project_assets (
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   asset_id UUID NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
@@ -27,7 +30,15 @@ await db.query(`CREATE TABLE IF NOT EXISTS project_assets (
   PRIMARY KEY (project_id, asset_id)
 )`);
 
-app.get('/health', async () => ({ ok: true, service: 'news-video-factory' }));
+app.get('/health', async () => ({
+  ok: true,
+  service: 'news-video-factory',
+  stockSearch: {
+    pexels: Boolean(process.env.PEXELS_API_KEY),
+    pixabay: Boolean(process.env.PIXABAY_API_KEY),
+    localStoryboardModel: Boolean(process.env.OLLAMA_BASE_URL && process.env.OLLAMA_MODEL),
+  },
+}));
 
 app.get('/api/projects', async () => {
   const { rows } = await db.query('SELECT * FROM projects ORDER BY created_at DESC LIMIT 30');
@@ -130,7 +141,7 @@ app.get<{ Querystring: { q?: string; type?: 'photo' | 'video' } }>('/api/stock/s
   const query = request.query.q?.trim();
   if (!key) return reply.code(503).send({ error: 'PEXELS_API_KEY is not configured' });
   if (!query) return reply.code(400).send({ error: 'q is required' });
-  const baseUrl = request.query.type === 'photo' ? 'https://api.pexels.com/v1/photos/search' : 'https://api.pexels.com/videos/search';
+  const baseUrl = request.query.type === 'photo' ? 'https://api.pexels.com/v1/search' : 'https://api.pexels.com/v1/videos/search';
   const response = await fetch(`${baseUrl}?query=${encodeURIComponent(query)}&per_page=12&orientation=portrait&locale=ru-RU`, { headers: { Authorization: key } });
   if (!response.ok) return reply.code(response.status).send({ error: 'stock provider request failed' });
   return response.json();

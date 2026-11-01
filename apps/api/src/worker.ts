@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { Pool } from 'pg';
 import { connection } from './queue.js';
+import { downloadAutomaticStock } from './stock.js';
 
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
 const stages = ['storyboard', 'footage-selection', 'voiceover', 'captions', 'render'] as const;
@@ -50,17 +51,17 @@ new Worker(
       const attachedAssets = await db.query<{ object_key: string; mime_type: string }>(`SELECT DISTINCT a.object_key, a.mime_type FROM assets a
         LEFT JOIN project_assets pa ON pa.asset_id = a.id
         WHERE a.project_id = $1 OR pa.project_id = $1 ORDER BY a.created_at LIMIT 6`, [job.data.projectId]);
+      await setStage(jobId, 'storyboard');
+      await job.updateProgress({ stage: 'storyboard' });
+      const automaticAssets = attachedAssets.rows.length ? [] : await downloadAutomaticStock(project.news_text, job.data.projectId, mediaRoot, db);
       const terms = searchTerms(project.news_text);
       const libraryAssets = terms.length ? await db.query<{ object_key: string; mime_type: string }>(
         `SELECT object_key, mime_type FROM assets WHERE project_id IS NULL AND tags::text ILIKE ANY($1::text[]) ORDER BY created_at LIMIT 6`,
         [terms.map((term) => `%${term}%`)],
       ) : { rows: [] };
-      const assets = attachedAssets.rows.length ? attachedAssets.rows : libraryAssets.rows;
+      const assets = attachedAssets.rows.length ? attachedAssets.rows : automaticAssets.length ? automaticAssets : libraryAssets.rows;
       const outputDir = join(mediaRoot, 'outputs');
       await mkdir(outputDir, { recursive: true });
-
-      await setStage(jobId, 'storyboard');
-      await job.updateProgress({ stage: 'storyboard' });
 
       await setStage(jobId, 'footage-selection');
       await job.updateProgress({ stage: 'footage-selection', source: assets.length ? 'uploaded-media' : 'color-background', assets: assets.length });

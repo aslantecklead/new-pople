@@ -25,6 +25,9 @@ CREATE TABLE IF NOT EXISTS assets (
   mime_type TEXT NOT NULL,
   duration_seconds NUMERIC,
   tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+  source_provider TEXT,
+  source_url TEXT,
+  source_author TEXT,
   embedding vector(768),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
