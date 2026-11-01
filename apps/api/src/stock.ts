@@ -132,7 +132,9 @@ async function searchNasa(scene: Scene): Promise<StockAsset[]> {
 async function searchCoverr(scene: Scene): Promise<StockAsset[]> {
   const key = process.env.COVERR_API_KEY;
   if (!key) return [];
-  const params = new URLSearchParams({ query: scene.query, page_size: '6', urls: 'true', sort: 'trending', filter: 'is_vertical:true' });
+  // Some searches have no vertical result at Coverr. Crop happens in the renderer,
+  // so returning a relevant landscape clip is preferable to returning no video.
+  const params = new URLSearchParams({ query: scene.query, page_size: '6', urls: 'true', sort: 'trending' });
   const response = await fetch(`https://api.coverr.co/videos?${params}`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(20_000) });
   if (!response.ok) return [];
   const data = await response.json() as { hits?: Array<{ id?: string; title?: string; urls?: { mp4_download?: string; mp4_preview?: string; mp4?: string }; mp4_download?: string; thumbnail?: string }> };
@@ -165,7 +167,7 @@ async function scrapePublicImages(query: string): Promise<StockAsset[]> {
   const [google, yandex, pinterest, vecteezy] = await Promise.all([
     scrapeSource(query, 'google-images', `https://www.google.com/search?tbm=isch&q=${encoded}`, /(https?:\/\/encrypted-tbn[^"'\\\s]+)/g),
     scrapeSource(query, 'yandex-images', `https://yandex.ru/images/search?text=${encoded}`, /"(?:preview|origin)":"(https?(?::|\\:)(?:\/|\\\/){2}[^" ]+?\.(?:jpg|jpeg|png)[^" ]*)/gi),
-    scrapeSource(query, 'pinterest', `https://www.pinterest.com/search/pins/?q=${encoded}`, /(https?:\/\/i\.pinimg\.com[^"'\\\s]+)/g),
+    scrapeSource(query, 'pinterest', `https://www.pinterest.com/search/pins/?q=${encoded}`, /(https?:\/\/i\.pinimg\.com\/[^"'\\\s)]+?\.(?:jpg|jpeg|png|webp)(?:\?[^"'\\\s)]*)?)/gi),
     scrapeSource(query, 'vecteezy', `https://www.vecteezy.com/search?content_type=video&qterm=${encoded}`, /(https?:\/\/(?:static|cdn)\.vecteezy\.com[^"'\\\s]+?\.(?:jpg|jpeg|png)[^"'\\\s]*)/gi),
   ]);
   return [...google, ...yandex, ...pinterest, ...vecteezy];
