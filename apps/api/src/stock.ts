@@ -11,7 +11,7 @@ type StockAsset = {
   extension: string;
   mimeType: string;
   originalName: string;
-  sourceProvider: 'pexels' | 'wikimedia-commons';
+  sourceProvider: 'pexels' | 'wikimedia-commons' | 'nasa';
   sourceUrl: string;
   sourceAuthor?: string;
   sourceLicense?: string;
@@ -118,6 +118,17 @@ async function searchWikimediaCommons(scene: Scene): Promise<StockAsset[]> {
   });
 }
 
+async function searchNasa(scene: Scene): Promise<StockAsset[]> {
+  const response = await fetch(`https://images-api.nasa.gov/search?q=${encodeURIComponent(scene.query)}&media_type=image&page_size=2`, { signal: AbortSignal.timeout(20_000) });
+  if (!response.ok) return [];
+  const data = await response.json() as { collection?: { items?: Array<{ href?: string; data?: Array<{ title?: string; photographer?: string; nasa_id?: string }>; links?: Array<{ href?: string }> }> } };
+  return (data.collection?.items ?? []).flatMap((item) => {
+    const meta = item.data?.[0];
+    const preview = item.links?.[0]?.href;
+    return meta && preview ? [{ downloadUrl: preview, extension: '.jpg', mimeType: 'image/jpeg', originalName: `${meta.nasa_id ?? 'nasa'}.jpg`, sourceProvider: 'nasa' as const, sourceUrl: item.href ?? 'https://images.nasa.gov/', sourceAuthor: meta.photographer ?? 'NASA', sourceLicense: 'NASA media — review usage rights', tags: [scene.query] }] : [];
+  });
+}
+
 export async function downloadSelectedStock(asset: StockAsset, projectId: string, mediaRoot: string, db: Pool) {
   const response = await fetch(asset.downloadUrl, { signal: AbortSignal.timeout(120_000) });
   if (!response.ok || !response.body) throw new Error(`cannot download ${asset.sourceProvider} media`);
@@ -147,15 +158,25 @@ export async function downloadAutomaticStock(text: string, projectId: string, me
 }
 
 const selections = new Map<string, StockAsset>();
+const searchCache = new Map<string, { expiresAt: number; items: RemoteMedia[] }>();
 export async function searchRemoteMedia(text: string) {
+  const cacheKey = text.trim().toLowerCase();
+  const cached = searchCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.items;
   const scenes = await createStoryboard(text);
-  const found = (await Promise.all(scenes.map(async (scene) => (await searchWikimediaCommons(scene)).slice(0, 4).map((asset) => ({ scene, asset })))))
+  const found = (await Promise.all(scenes.map(async (scene) => {
+    const commons = (await searchWikimediaCommons(scene)).slice(0, 4);
+    const nasa = (await searchNasa(scene)).slice(0, 1);
+    return [...commons, ...nasa].map((asset) => ({ scene, asset }));
+  })))
     .flat().slice(0, 20);
-  return found.map(({ scene, asset }) => {
+  const items = found.map(({ scene, asset }) => {
     const id = randomUUID();
     selections.set(id, asset);
     return { id, kind: asset.mimeType.startsWith('image/') ? 'photo' as const : 'video' as const, title: asset.originalName, previewUrl: asset.downloadUrl, provider: asset.sourceProvider, sourceUrl: asset.sourceUrl, author: asset.sourceAuthor, license: asset.sourceLicense, query: scene.query } satisfies RemoteMedia;
   });
+  searchCache.set(cacheKey, { expiresAt: Date.now() + 86_400_000, items });
+  return items;
 }
 
 export function selectedRemoteMedia(id: string) { return selections.get(id); }
