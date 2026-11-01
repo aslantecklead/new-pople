@@ -28,6 +28,7 @@ function App() {
   const [mediaTab, setMediaTab] = useState<'video' | 'photo'>('video');
   const [articleUrl, setArticleUrl] = useState('');
   const [searching, setSearching] = useState(false);
+  const [connectionError, setConnectionError] = useState<string>();
 
   async function refreshProjects() {
     const response = await fetch(`${API_URL}/api/projects`);
@@ -43,13 +44,25 @@ function App() {
     if (!response.ok) setStatus('Библиотека станет доступна после обновления backend');
   }
 
-  useEffect(() => {
-    fetch(`${API_URL}/health`).then(async (response) => {
+  async function checkConnection() {
+    setConnectionError(undefined);
+    setStatus('Проверяю связь с сервером…');
+    try {
+      const response = await fetch(`${API_URL}/health`, { signal: AbortSignal.timeout(8_000) });
       const health = await response.json() as { stockSearch?: { wikimediaCommons?: boolean; pexels?: boolean } };
       const stockReady = health.stockSearch?.wikimediaCommons || health.stockSearch?.pexels;
       setStatus(response.ok ? (stockReady ? 'Сервер подключён · автопоиск медиа включён' : 'Сервер подключён · включи Wikimedia Commons или добавь PEXELS_API_KEY') : 'Сервер недоступен');
+      if (!response.ok) setConnectionError(`Сервер вернул HTTP ${response.status}.`);
       if (response.ok) { void refreshProjects(); void searchLibrary(''); }
-    }).catch(() => setStatus('Сервер недоступен'));
+    } catch (error) {
+      const reason = error instanceof Error && error.name === 'TimeoutError' ? 'Туннель не ответил за 8 секунд.' : 'Не удалось подключиться к локальному туннелю.';
+      setStatus('Сервер недоступен');
+      setConnectionError(`${reason} Проверь, что SSH-туннель на 127.0.0.1:18080 запущен.`);
+    }
+  }
+
+  useEffect(() => {
+    void checkConnection();
   }, []);
 
   async function startRender(event: FormEvent) {
@@ -59,6 +72,7 @@ function App() {
       return;
     }
     setSearching(true);
+    setConnectionError(undefined);
     try {
     setStatus('Создаю проект…');
     const project = activeProjectId
@@ -89,9 +103,16 @@ function App() {
     setStatus(search.items?.length ? 'Материалы найдены — выбери кадры для монтажа' : 'Ничего не найдено: измени текст или добавь свои кадры');
     void refreshProjects();
     } catch (error) {
-      if (error instanceof Error && error.name === 'TimeoutError') setStatus('Сервер не ответил вовремя. Повтори поиск — ссылка для этого не нужна');
-      else if (error instanceof TypeError) setStatus('Нет соединения с сервером. Проверь Tailscale и адрес API');
-      else setStatus('Не удалось создать проект или найти материалы');
+      if (error instanceof Error && error.name === 'TimeoutError') {
+        setStatus('Сервер не ответил вовремя');
+        setConnectionError('Запрос к серверу превысил лимит времени. Туннель открыт, но сервер или внешний поиск отвечает слишком долго.');
+      } else if (error instanceof TypeError) {
+        setStatus('Нет соединения с сервером');
+        setConnectionError('Браузер не может обратиться к локальному туннелю. Нажми «Проверить связь»; если ошибка остаётся, туннель будет переподнят.');
+      } else {
+        setStatus('Не удалось создать проект или найти материалы');
+        setConnectionError(error instanceof Error ? error.message : 'Неизвестная ошибка запроса.');
+      }
     } finally { setSearching(false); }
   }
 
@@ -157,6 +178,7 @@ function App() {
   return <main>
     <header><span className="mark">НЛ</span><div><b>Автомонтаж новостей</b><small>локальная панель · серверный рендер</small></div></header>
     <section className="intro"><p>Текст → сцены и поиск стоков → кадры → голос → субтитры → MP4.</p><span>{status}</span></section>
+    {connectionError && <section className="error-panel" role="alert"><b>Не удалось связаться с сервером</b><p>{connectionError}</p><code>API: {API_URL}</code><button type="button" onClick={() => void checkConnection()}>Проверить связь</button></section>}
     {projects.length > 0 && <section className="projects"><b>Сохранённые проекты</b><div>{projects.map((project) => <button type="button" key={project.id} onClick={() => void resumeProject(project)}>{project.news_text.slice(0, 64)}…</button>)}</div></section>}
     <form onSubmit={startRender}>
       <div className="article-import"><input value={articleUrl} onChange={(e) => setArticleUrl(e.target.value)} placeholder="Ссылка на статью newpeople.ru/news/..." /><button type="button" onClick={() => void importArticle()}>Загрузить статью</button></div>

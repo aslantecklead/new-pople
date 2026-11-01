@@ -8,6 +8,8 @@ header small { display: block; font-size: 13px; color: #aab4c1; font-weight: 400
 .intro { margin: 48px 0 22px; padding: 26px; background: #1c2635; border-radius: 20px; }
 .intro p { font-size: 22px; line-height: 1.35; margin: 0 0 12px; }
 .intro span { color: #b8c4d5; font-size: 14px; }
+.error-panel { display: grid; gap: 10px; margin: 0 0 22px; padding: 18px 20px; border: 1px solid #fb7185; border-radius: 14px; background: #3a1823; color: #ffe4e6; }
+.error-panel p { margin: 0; line-height: 1.45; }.error-panel code { color: #fecdd3; font-size: 12px; overflow-wrap: anywhere; }.error-panel button { justify-self: start; background: #ffe4e6; color: #3a1823; font-weight: 800; }
 form { display: grid; gap: 12px; }
 label, .upload b { font-size: 15px; }
 textarea { min-height: 220px; resize: vertical; padding: 18px; border: 1px solid #334155; border-radius: 14px; color: inherit; background: #171e2a; font: inherit; line-height: 1.5; }
