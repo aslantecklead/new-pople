@@ -9,6 +9,7 @@ import { basename, extname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Pool } from 'pg';
 import { renderQueue } from './queue.js';
+import { downloadSelectedStock, searchRemoteMedia, selectedRemoteMedia } from './stock.js';
 
 const app = Fastify({ logger: true });
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -135,6 +136,25 @@ app.get<{ Querystring: { q?: string } }>('/api/library/search', async (request) 
     [query],
   );
   return rows.map((asset) => ({ ...asset, url: `/media/${String(asset.object_key).replaceAll('\\', '/')}` }));
+});
+
+app.post<{ Body: { newsText: string } }>('/api/media/search', async (request, reply) => {
+  const text = request.body?.newsText?.trim();
+  if (!text) return reply.code(400).send({ error: 'newsText is required' });
+  const items = await searchRemoteMedia(text);
+  return { items };
+});
+
+app.post<{ Params: { id: string }; Body: { mediaIds: string[] } }>('/api/projects/:id/assets/import', async (request, reply) => {
+  const ids = request.body?.mediaIds ?? [];
+  const exists = await db.query('SELECT 1 FROM projects WHERE id = $1', [request.params.id]);
+  if (!exists.rowCount) return reply.code(404).send({ error: 'project not found' });
+  const imported = [];
+  for (const id of ids.slice(0, 8)) {
+    const media = selectedRemoteMedia(id);
+    if (media) imported.push(await downloadSelectedStock(media, request.params.id, mediaRoot, db));
+  }
+  return reply.code(201).send({ imported: imported.length });
 });
 
 app.get<{ Querystring: { q?: string; type?: 'photo' | 'video' } }>('/api/stock/search', async (request, reply) => {

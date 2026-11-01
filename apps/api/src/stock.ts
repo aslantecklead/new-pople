@@ -19,6 +19,7 @@ type StockAsset = {
 };
 
 type Scene = { query: string; kind: 'video' | 'photo' };
+export type RemoteMedia = { id: string; kind: 'video' | 'photo'; title: string; previewUrl: string; provider: string; sourceUrl: string; author?: string; license?: string; query: string };
 type CommonsImageInfo = {
   url?: string;
   thumburl?: string;
@@ -91,8 +92,8 @@ function plainText(value?: string) {
   return value?.replace(/<[^>]*>/g, '').replace(/&quot;/g, '"').replace(/&amp;/g, '&').trim();
 }
 
-async function findOnWikimediaCommons(scene: Scene): Promise<StockAsset | undefined> {
-  if (process.env.WIKIMEDIA_COMMONS_ENABLED === 'false') return undefined;
+async function searchWikimediaCommons(scene: Scene): Promise<StockAsset[]> {
+  if (process.env.WIKIMEDIA_COMMONS_ENABLED === 'false') return [];
   const filetype = scene.kind === 'photo' ? 'bitmap' : 'video';
   const params = new URLSearchParams({
     action: 'query', format: 'json', generator: 'search', gsrnamespace: '6', gsrlimit: '8',
@@ -103,26 +104,21 @@ async function findOnWikimediaCommons(scene: Scene): Promise<StockAsset | undefi
     headers: { 'user-agent': process.env.WIKIMEDIA_USER_AGENT ?? 'NewsVideoFactory/0.1 (self-hosted local test)' },
     signal: AbortSignal.timeout(20_000),
   });
-  if (!response.ok) return undefined;
+  if (!response.ok) return [];
   const data = await response.json() as { query?: { pages?: Record<string, CommonsPage> } };
   const infos = Object.values(data.query?.pages ?? {}).map((page) => ({ title: page.title, info: page.imageinfo?.[0] })).filter((item): item is { title: string; info: CommonsImageInfo } => Boolean(item.info?.url && item.info.mime));
-  const allowed = infos.find(({ info }) => {
+  const allowed = infos.filter(({ info }) => {
     const license = plainText(info.extmetadata?.LicenseShortName?.value)?.toUpperCase() ?? '';
     return license.includes('PDM') || license.includes('PUBLIC DOMAIN') || license.includes('CC0') || (license.includes('CC BY') && !license.includes('SA'));
   });
-  if (!allowed) return undefined;
-  const { info, title } = allowed;
-  const isImage = info.mime?.startsWith('image/');
-  const extension = isImage ? '.jpg' : info.mime === 'video/webm' ? '.webm' : info.mime === 'video/ogg' ? '.ogv' : '.mp4';
-  return {
-    downloadUrl: isImage ? info.thumburl ?? info.url! : info.url!, extension, mimeType: info.mime!,
-    originalName: title.replace(/^File:/, '').replace(/\s+/g, '-'), sourceProvider: 'wikimedia-commons',
-    sourceUrl: info.descriptionurl ?? `https://commons.wikimedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`,
-    sourceAuthor: plainText(info.extmetadata?.Artist?.value), sourceLicense: plainText(info.extmetadata?.LicenseShortName?.value), tags: [scene.query],
-  };
+  return allowed.map(({ info, title }) => {
+    const isImage = info.mime?.startsWith('image/');
+    const extension = isImage ? '.jpg' : info.mime === 'video/webm' ? '.webm' : info.mime === 'video/ogg' ? '.ogv' : '.mp4';
+    return { downloadUrl: isImage ? info.thumburl ?? info.url! : info.url!, extension, mimeType: info.mime!, originalName: title.replace(/^File:/, '').replace(/\s+/g, '-'), sourceProvider: 'wikimedia-commons' as const, sourceUrl: info.descriptionurl ?? `https://commons.wikimedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`, sourceAuthor: plainText(info.extmetadata?.Artist?.value), sourceLicense: plainText(info.extmetadata?.LicenseShortName?.value), tags: [scene.query] };
+  });
 }
 
-async function download(asset: StockAsset, projectId: string, mediaRoot: string, db: Pool) {
+export async function downloadSelectedStock(asset: StockAsset, projectId: string, mediaRoot: string, db: Pool) {
   const response = await fetch(asset.downloadUrl, { signal: AbortSignal.timeout(120_000) });
   if (!response.ok || !response.body) throw new Error(`cannot download ${asset.sourceProvider} media`);
   const id = randomUUID();
@@ -141,11 +137,25 @@ export async function downloadAutomaticStock(text: string, projectId: string, me
   const assets: Array<{ object_key: string; mime_type: string }> = [];
   for (const scene of scenes) {
     try {
-      const candidate = await findOnWikimediaCommons(scene) ?? await findOnPexels(scene);
-      if (candidate) assets.push(await download(candidate, projectId, mediaRoot, db));
+      const candidate = (await searchWikimediaCommons(scene))[0] ?? await findOnPexels(scene);
+      if (candidate) assets.push(await downloadSelectedStock(candidate, projectId, mediaRoot, db));
     } catch {
       // One unavailable source must not cancel the whole video; the next scene or local library can still render.
     }
   }
   return assets;
 }
+
+const selections = new Map<string, StockAsset>();
+export async function searchRemoteMedia(text: string) {
+  const scenes = await createStoryboard(text);
+  const found = (await Promise.all(scenes.map(async (scene) => (await searchWikimediaCommons(scene)).slice(0, 4).map((asset) => ({ scene, asset })))))
+    .flat().slice(0, 20);
+  return found.map(({ scene, asset }) => {
+    const id = randomUUID();
+    selections.set(id, asset);
+    return { id, kind: asset.mimeType.startsWith('image/') ? 'photo' as const : 'video' as const, title: asset.originalName, previewUrl: asset.downloadUrl, provider: asset.sourceProvider, sourceUrl: asset.sourceUrl, author: asset.sourceAuthor, license: asset.sourceLicense, query: scene.query } satisfies RemoteMedia;
+  });
+}
+
+export function selectedRemoteMedia(id: string) { return selections.get(id); }

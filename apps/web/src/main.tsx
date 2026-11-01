@@ -7,6 +7,7 @@ const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080';
 type Project = { id: string; news_text: string; created_at: string };
 type LibraryAsset = { id: string; original_name: string; mime_type: string; tags: string[]; url: string };
 type SourceCredit = { source_provider: string; source_url: string; source_author?: string; source_license?: string };
+type RemoteMedia = { id: string; kind: 'video' | 'photo'; title: string; previewUrl: string; provider: string; sourceUrl: string; author?: string; license?: string; query: string };
 
 function App() {
   const [newsText, setNewsText] = useState('');
@@ -22,6 +23,9 @@ function App() {
   const [libraryFile, setLibraryFile] = useState<File>();
   const [libraryTags, setLibraryTags] = useState('');
   const [sourceCredits, setSourceCredits] = useState<SourceCredit[]>([]);
+  const [remoteMedia, setRemoteMedia] = useState<RemoteMedia[] | undefined>();
+  const [selectedRemoteIds, setSelectedRemoteIds] = useState<string[]>([]);
+  const [mediaTab, setMediaTab] = useState<'video' | 'photo'>('video');
 
   async function refreshProjects() {
     const result = await fetch(`${API_URL}/api/projects`).then((response) => response.json());
@@ -44,10 +48,11 @@ function App() {
 
   async function startRender(event: FormEvent) {
     event.preventDefault();
+    try {
     setStatus('Создаю проект…');
     const project = activeProjectId
-      ? await fetch(`${API_URL}/api/projects/${activeProjectId}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ newsText }) }).then((r) => r.json())
-      : await fetch(`${API_URL}/api/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ newsText }) }).then((r) => r.json());
+      ? await fetch(`${API_URL}/api/projects/${activeProjectId}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ newsText }), signal: AbortSignal.timeout(20_000) }).then((r) => r.json())
+      : await fetch(`${API_URL}/api/projects`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ newsText }), signal: AbortSignal.timeout(20_000) }).then((r) => r.json());
     if (project.error) return setStatus(project.error);
     setActiveProjectId(project.id);
     for (const file of files) {
@@ -63,7 +68,26 @@ function App() {
     for (const assetId of selectedLibraryIds) {
       await fetch(`${API_URL}/api/projects/${project.id}/assets/from-library`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ assetId }) });
     }
-    const job = await fetch(`${API_URL}/api/projects/${project.id}/render`, { method: 'POST' }).then((r) => r.json());
+    setStatus('Ищу материалы в открытых источниках…');
+    const search = await fetch(`${API_URL}/api/media/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ newsText }), signal: AbortSignal.timeout(45_000) }).then((r) => r.json());
+    if (search.error) return setStatus(search.error);
+    setRemoteMedia(search.items ?? []);
+    setSelectedRemoteIds((search.items ?? []).slice(0, 5).map((item: RemoteMedia) => item.id));
+    setStatus(search.items?.length ? 'Материалы найдены — выбери кадры для монтажа' : 'Ничего не найдено: измени текст или добавь свои кадры');
+    void refreshProjects();
+    } catch (error) {
+      setStatus(error instanceof Error && error.name === 'TimeoutError' ? 'Сервер не ответил за 20 секунд' : 'Не удалось создать проект или найти материалы');
+    }
+  }
+
+  async function startMontage() {
+    if (!activeProjectId) return;
+    try {
+    setStatus('Скачиваю выбранные кадры на сервер…');
+    const imported = await fetch(`${API_URL}/api/projects/${activeProjectId}/assets/import`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mediaIds: selectedRemoteIds }), signal: AbortSignal.timeout(120_000) }).then((r) => r.json());
+    if (imported.error) return setStatus(imported.error);
+    setRemoteMedia(undefined);
+    const job = await fetch(`${API_URL}/api/projects/${activeProjectId}/render`, { method: 'POST', signal: AbortSignal.timeout(20_000) }).then((r) => r.json());
     if (job.error) return setStatus(job.error);
     setStatus('Ролик собирается: раскадровка…');
     const poll = window.setInterval(async () => {
@@ -73,13 +97,14 @@ function App() {
         window.clearInterval(poll);
         setOutputUrl(`${API_URL}/media/${current.output_path}`);
         setStatus('Черновик готов');
-        void fetch(`${API_URL}/api/projects/${project.id}`).then((response) => response.json()).then((detail) => {
+        void fetch(`${API_URL}/api/projects/${activeProjectId}`).then((response) => response.json()).then((detail) => {
           setSourceCredits((detail.assets ?? []).filter((asset: SourceCredit) => asset.source_provider && asset.source_url));
         });
       }
       if (current.status === 'failed') { window.clearInterval(poll); setStatus('Рендер не удался — проверь логи worker'); }
     }, 1500);
     void refreshProjects();
+    } catch { setStatus('Не удалось скачать кадры или запустить монтаж'); }
   }
 
   async function uploadToLibrary(event: FormEvent) {
@@ -111,7 +136,7 @@ function App() {
       <label htmlFor="news">Текст новости</label>
       <textarea id="news" value={newsText} onChange={(e) => setNewsText(e.target.value)} placeholder="Вставь текст новости. На сервере он станет раскадровкой и голосом." required />
       <div className="upload"><b>Свои кадры — необязательно</b><span>{files.length ? `Выбрано: ${files.map((file) => file.name).join(', ')}` : 'Без них сервер найдёт подходящие стоковые видео и картинки сам. Ваши кадры имеют приоритет.'}</span><input key={assetInputKey} type="file" accept="video/*,image/*" multiple onChange={(e) => setFiles(Array.from(e.target.files ?? []))} /></div>
-      <button className="primary" type="submit">Найти кадры и собрать черновик</button>
+      <button className="primary" type="submit">Найти кадры</button>
     </form>
     <section className="library"><h2>Библиотека футажей</h2><p>Загрузи видео или картинку один раз, укажи теги — «Госдума, заседание, документы». Следующие новости смогут подобрать её сами.</p>
       <form onSubmit={uploadToLibrary} className="library-form"><input type="file" accept="video/*,image/*" onChange={(e) => setLibraryFile(e.target.files?.[0])} /><input value={libraryTags} onChange={(e) => setLibraryTags(e.target.value)} placeholder="Теги через запятую" /><button type="submit">Добавить в библиотеку</button></form>
@@ -119,6 +144,7 @@ function App() {
       <div className="asset-grid">{library.map((asset) => <label className="asset" key={asset.id}><input type="checkbox" checked={selectedLibraryIds.includes(asset.id)} onChange={() => setSelectedLibraryIds((ids) => ids.includes(asset.id) ? ids.filter((id) => id !== asset.id) : [...ids, asset.id])} />{asset.mime_type.startsWith('image/') ? <img src={`${API_URL}${asset.url}`} /> : <video muted src={`${API_URL}${asset.url}`} />}<span>{asset.original_name}</span><small>{asset.tags?.join(', ')}</small></label>)}</div>
     </section>
     {sourceCredits.length > 0 && <section className="credits"><b>Источники кадров</b>{sourceCredits.map((credit) => <a key={credit.source_url} href={credit.source_url} target="_blank" rel="noreferrer">{credit.source_provider}: {credit.source_author || 'автор'}{credit.source_license ? ` · ${credit.source_license}` : ''}</a>)}</section>}
+    {remoteMedia && <div className="modal-backdrop"><section className="media-modal"><header><b>Подбор кадров</b><button type="button" onClick={() => setRemoteMedia(undefined)}>Закрыть</button></header><p>Открытые источники · выбери до восьми материалов, затем сервис скачает их и соберёт ролик.</p><div className="tabs"><button type="button" className={mediaTab === 'video' ? 'active' : ''} onClick={() => setMediaTab('video')}>Видео ({remoteMedia.filter((item) => item.kind === 'video').length})</button><button type="button" className={mediaTab === 'photo' ? 'active' : ''} onClick={() => setMediaTab('photo')}>Фото ({remoteMedia.filter((item) => item.kind === 'photo').length})</button></div><div className="remote-grid">{remoteMedia.filter((item) => item.kind === mediaTab).map((item) => <label className="asset" key={item.id}><input type="checkbox" checked={selectedRemoteIds.includes(item.id)} onChange={() => setSelectedRemoteIds((ids) => ids.includes(item.id) ? ids.filter((id) => id !== item.id) : ids.length < 8 ? [...ids, item.id] : ids)} />{item.kind === 'photo' ? <img src={item.previewUrl} /> : <video muted controls preload="metadata" src={item.previewUrl} />}<span>{item.title}</span><small>{item.provider} · {item.query}</small><a href={item.sourceUrl} target="_blank" rel="noreferrer">Источник</a></label>)}</div><button className="primary" type="button" onClick={() => void startMontage()} disabled={!selectedRemoteIds.length}>Скачать выбранное и собрать ролик</button></section></div>}
     {outputUrl && <section className="output"><b>Готовый черновик</b><video controls src={outputUrl} /> <a href={outputUrl} download>Скачать MP4</a></section>}
   </main>;
 }

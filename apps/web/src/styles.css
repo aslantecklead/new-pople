@@ -32,3 +32,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .asset small { color: #94a3b8; }
 .credits { display: grid; gap: 8px; }
 .credits a { color: #b8c4d5; font-size: 14px; }
+.modal-backdrop { position: fixed; inset: 0; z-index: 10; overflow: auto; padding: 42px 20px; background: rgba(4, 8, 15, .82); }
+.media-modal { max-width: 1080px; margin: 0 auto; padding: 24px; background: #1c2635; border: 1px solid #56667c; border-radius: 18px; }
+.media-modal header { justify-content: space-between; }.media-modal header button, .tabs button { background: #334155; color: #fff; }
+.tabs { display: flex; gap: 8px; margin: 18px 0; }.tabs .active { background: #e9ff38; color: #11170d; font-weight: 800; }
+.remote-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; margin-bottom: 20px; }
+.video-card { display: grid; place-items: center; width: 100%; aspect-ratio: 9 / 14; border-radius: 8px; background: #0b1018; color: #e9ff38; font-size: 18px; }
