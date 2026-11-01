@@ -28,13 +28,17 @@ function App() {
   const [mediaTab, setMediaTab] = useState<'video' | 'photo'>('video');
 
   async function refreshProjects() {
-    const result = await fetch(`${API_URL}/api/projects`).then((response) => response.json());
-    setProjects(result);
+    const response = await fetch(`${API_URL}/api/projects`);
+    const result = await response.json();
+    setProjects(Array.isArray(result) ? result : []);
+    if (!response.ok) setStatus(result.error ?? 'Не удалось загрузить проекты');
   }
 
   async function searchLibrary(query = libraryQuery) {
-    const result = await fetch(`${API_URL}/api/library/search?q=${encodeURIComponent(query)}`).then((response) => response.json());
-    setLibrary(result);
+    const response = await fetch(`${API_URL}/api/library/search?q=${encodeURIComponent(query)}`);
+    const result = await response.json();
+    setLibrary(Array.isArray(result) ? result : []);
+    if (!response.ok) setStatus('Библиотека станет доступна после обновления backend');
   }
 
   useEffect(() => {
