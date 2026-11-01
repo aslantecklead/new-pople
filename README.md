@@ -17,6 +17,9 @@ npm run dev:web
 VITE_API_URL=http://SERVER_TAILSCALE_IP:8080
 ```
 
+`WEB_ORIGIN` на сервере должен содержать оба локальных адреса панели:
+`http://localhost:5173,http://127.0.0.1:5173`.
+
 ## На сервере: backend
 
 ```powershell

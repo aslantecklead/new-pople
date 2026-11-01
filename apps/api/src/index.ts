@@ -17,7 +17,16 @@ const mediaRoot = process.env.MEDIA_ROOT ?? join(process.cwd(), 'media');
 mkdirSync(join(mediaRoot, 'uploads'), { recursive: true });
 mkdirSync(join(mediaRoot, 'outputs'), { recursive: true });
 
-await app.register(cors, { origin: process.env.WEB_ORIGIN?.split(',') ?? true });
+const configuredOrigins = new Set((process.env.WEB_ORIGIN ?? '').split(',').map((origin) => origin.trim()).filter(Boolean));
+await app.register(cors, {
+  origin(origin, callback) {
+    if (!origin || configuredOrigins.has(origin) || /^https?:\/\/(localhost|127\.0\.0\.1)(?::\d+)?$/.test(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(null, false);
+  },
+});
 await app.register(multipart, { limits: { fileSize: 1_500_000_000, files: 20 } });
 await app.register(fastifyStatic, { root: mediaRoot, prefix: '/media/' });
 await db.query('ALTER TABLE render_jobs ADD COLUMN IF NOT EXISTS output_path TEXT');
