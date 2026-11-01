@@ -143,7 +143,13 @@ async function searchCoverr(scene: Scene): Promise<StockAsset[]> {
 }
 
 function uniqueUrls(html: string, expression: RegExp) {
-  return [...new Set([...html.matchAll(expression)].map((match) => match[1].replace(/\\u002F/g, '/').replace(/\\/g, '').replace(/&amp;/g, '&')))].slice(0, 8);
+  return [...new Set([...html.matchAll(expression)].map((match) => match[1]
+    .replace(/\\u002F/gi, '/')
+    .replace(/\\\\\//g, '/')
+    .replace(/\\\\"/g, '"')
+    .replace(/&amp;/g, '&')))]
+    .filter((value) => /^https?:\/\//i.test(value))
+    .slice(0, 8);
 }
 
 async function scrapeSource(query: string, provider: StockAsset['sourceProvider'], url: string, expression: RegExp): Promise<StockAsset[]> {
@@ -157,10 +163,10 @@ async function scrapeSource(query: string, provider: StockAsset['sourceProvider'
 async function scrapePublicImages(query: string): Promise<StockAsset[]> {
   const encoded = encodeURIComponent(query);
   const [google, yandex, pinterest, vecteezy] = await Promise.all([
-    scrapeSource(query, 'google-images', `https://www.google.com/search?tbm=isch&q=${encoded}`, /(https?:\\?\/\\?encrypted-tbn[^"'\\ ]+)/g),
-    scrapeSource(query, 'yandex-images', `https://yandex.ru/images/search?text=${encoded}`, /"(?:preview|origin)":"(https?:\\?\/\\?[^" ]+\.(?:jpg|jpeg|png)[^" ]*)/gi),
-    scrapeSource(query, 'pinterest', `https://www.pinterest.com/search/pins/?q=${encoded}`, /(https?:\\?\/\\?i\.pinimg\.com[^"'\\ ]+)/g),
-    scrapeSource(query, 'vecteezy', `https://www.vecteezy.com/search?content_type=video&qterm=${encoded}`, /(https?:\\?\/\\?(?:static|cdn)\.vecteezy\.com[^"'\\ ]+\.(?:jpg|jpeg|png)[^"'\\ ]*)/gi),
+    scrapeSource(query, 'google-images', `https://www.google.com/search?tbm=isch&q=${encoded}`, /(https?:\/\/encrypted-tbn[^"'\\\s]+)/g),
+    scrapeSource(query, 'yandex-images', `https://yandex.ru/images/search?text=${encoded}`, /"(?:preview|origin)":"(https?(?::|\\:)(?:\/|\\\/){2}[^" ]+?\.(?:jpg|jpeg|png)[^" ]*)/gi),
+    scrapeSource(query, 'pinterest', `https://www.pinterest.com/search/pins/?q=${encoded}`, /(https?:\/\/i\.pinimg\.com[^"'\\\s]+)/g),
+    scrapeSource(query, 'vecteezy', `https://www.vecteezy.com/search?content_type=video&qterm=${encoded}`, /(https?:\/\/(?:static|cdn)\.vecteezy\.com[^"'\\\s]+?\.(?:jpg|jpeg|png)[^"'\\\s]*)/gi),
   ]);
   return [...google, ...yandex, ...pinterest, ...vecteezy];
 }

@@ -27,6 +27,7 @@ function App() {
   const [selectedRemoteIds, setSelectedRemoteIds] = useState<string[]>([]);
   const [mediaTab, setMediaTab] = useState<'video' | 'photo'>('video');
   const [articleUrl, setArticleUrl] = useState('');
+  const [searching, setSearching] = useState(false);
 
   async function refreshProjects() {
     const response = await fetch(`${API_URL}/api/projects`);
@@ -53,6 +54,11 @@ function App() {
 
   async function startRender(event: FormEvent) {
     event.preventDefault();
+    if (!newsText.trim()) {
+      setStatus('Вставь текст новости — ссылка на статью необязательна');
+      return;
+    }
+    setSearching(true);
     try {
     setStatus('Создаю проект…');
     const project = activeProjectId
@@ -74,15 +80,19 @@ function App() {
       await fetch(`${API_URL}/api/projects/${project.id}/assets/from-library`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ assetId }) });
     }
     setStatus('Ищу материалы в открытых источниках…');
-    const search = await fetch(`${API_URL}/api/media/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ newsText }), signal: AbortSignal.timeout(45_000) }).then((r) => r.json());
+    const searchResponse = await fetch(`${API_URL}/api/media/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ newsText }), signal: AbortSignal.timeout(45_000) });
+    const search = await searchResponse.json();
+    if (!searchResponse.ok) return setStatus(search.error ?? `Поиск не запустился (HTTP ${searchResponse.status})`);
     if (search.error) return setStatus(search.error);
     setRemoteMedia(search.items ?? []);
     setSelectedRemoteIds((search.items ?? []).slice(0, 5).map((item: RemoteMedia) => item.id));
     setStatus(search.items?.length ? 'Материалы найдены — выбери кадры для монтажа' : 'Ничего не найдено: измени текст или добавь свои кадры');
     void refreshProjects();
     } catch (error) {
-      setStatus(error instanceof Error && error.name === 'TimeoutError' ? 'Сервер не ответил за 20 секунд' : 'Не удалось создать проект или найти материалы');
-    }
+      if (error instanceof Error && error.name === 'TimeoutError') setStatus('Сервер не ответил вовремя. Повтори поиск — ссылка для этого не нужна');
+      else if (error instanceof TypeError) setStatus('Нет соединения с сервером. Проверь Tailscale и адрес API');
+      else setStatus('Не удалось создать проект или найти материалы');
+    } finally { setSearching(false); }
   }
 
   async function importArticle() {
@@ -153,7 +163,7 @@ function App() {
       <label htmlFor="news">Текст новости</label>
       <textarea id="news" value={newsText} onChange={(e) => setNewsText(e.target.value)} placeholder="Вставь текст новости. На сервере он станет раскадровкой и голосом." required />
       <div className="upload"><b>Свои кадры — необязательно</b><span>{files.length ? `Выбрано: ${files.map((file) => file.name).join(', ')}` : 'Без них сервер найдёт подходящие стоковые видео и картинки сам. Ваши кадры имеют приоритет.'}</span><input key={assetInputKey} type="file" accept="video/*,image/*" multiple onChange={(e) => setFiles(Array.from(e.target.files ?? []))} /></div>
-      <button className="primary" type="submit">Найти кадры</button>
+      <button className="primary" type="submit" disabled={searching}>{searching ? 'Ищу кадры…' : 'Найти кадры'}</button>
     </form>
     <section className="library"><h2>Библиотека футажей</h2><p>Загрузи видео или картинку один раз, укажи теги — «Госдума, заседание, документы». Следующие новости смогут подобрать её сами.</p>
       <form onSubmit={uploadToLibrary} className="library-form"><input type="file" accept="video/*,image/*" onChange={(e) => setLibraryFile(e.target.files?.[0])} /><input value={libraryTags} onChange={(e) => setLibraryTags(e.target.value)} placeholder="Теги через запятую" /><button type="submit">Добавить в библиотеку</button></form>
