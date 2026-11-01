@@ -1,3 +1,4 @@
+import { extractKeywords, type Keyword } from './keywords.js';
 import 'dotenv/config';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
@@ -161,11 +162,20 @@ app.get<{ Querystring: { q?: string } }>('/api/library/search', async (request) 
   return rows.map((asset) => ({ ...asset, url: `/media/${String(asset.object_key).replaceAll('\\', '/')}` }));
 });
 
-app.post<{ Body: { newsText: string } }>('/api/media/search', async (request, reply) => {
+app.post<{Body:{newsText:string}}>('/api/keywords', async (request,reply) => {
   const text = request.body?.newsText?.trim();
-  if (!text) return reply.code(400).send({ error: 'newsText is required' });
-  const items = await searchRemoteMedia(text);
-  return { items };
+  if (!text || text.length > 20000) return reply.code(400).send({error:'Введите текст до 20 000 символов'});
+  try { return await extractKeywords(text); }
+  catch (error) { return reply.code(503).send({error:error instanceof Error ? error.message : 'Ошибка локальной модели'}); }
+});
+
+app.post<{ Body: { newsText: string; keywords?: Keyword[]; page?: number } }>('/api/media/search', async (request, reply) => {
+  const text = request.body?.newsText?.trim();
+  if (!text) return reply.code(400).send({ error: 'Введите текст новости' });
+  const {keywords, page=1} = request.body;
+  if (!Array.isArray(keywords) || !keywords.length || keywords.length > 12 || keywords.some(k => typeof k?.query !== 'string' || !k.query.trim() || k.query.length>100 || typeof k.label !== 'string') || !Number.isInteger(page) || page<1 || page>50)
+    return reply.code(400).send({error:'Укажите 1–12 поисковых запросов длиной до 100 символов'});
+  return searchRemoteMedia(text,keywords,page);
 });
 
 app.post<{ Params: { id: string }; Body: { mediaIds: string[] } }>('/api/projects/:id/assets/import', async (request, reply) => {

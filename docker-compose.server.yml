@@ -1,4 +1,12 @@
 services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    environment:
+      OLLAMA_NUM_PARALLEL: 1
+    volumes:
+      - ollama-data:/root/.ollama
+
   postgres:
     image: pgvector/pgvector:pg17
     restart: unless-stopped
@@ -32,6 +40,8 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379
       MEDIA_ROOT: /data/media
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: qwen2.5:3b
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,6 +63,8 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379
       MEDIA_ROOT: /data/media
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: qwen2.5:3b
     depends_on:
       postgres:
         condition: service_healthy
@@ -62,6 +74,7 @@ services:
       - media-data:/data/media
 
 volumes:
+  ollama-data:
   postgres-data:
   redis-data:
   media-data:

@@ -41,3 +41,23 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .tabs { display: flex; gap: 8px; margin: 18px 0; }.tabs .active { background: #e9ff38; color: #11170d; font-weight: 800; }
 .remote-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; margin-bottom: 20px; }
 .video-card { display: grid; place-items: center; width: 100%; aspect-ratio: 9 / 14; border-radius: 8px; background: #0b1018; color: #e9ff38; font-size: 18px; }
+main { max-width: 1100px; padding: 28px 24px; }
+.intro {margin:24px 0; padding:20px;}.intro p{font-size:24px;}
+.projects {margin:0 0 20px;} summary {cursor:pointer;font-weight:700;}
+.keyword-panel {background:#1c2635;padding:18px;border:1px solid #334155;border-radius:14px;}
+.section-title {display:flex;gap:12px;align-items:center;flex-wrap:wrap;}.section-title small,.keyword-panel p{color:#aab4c1;font-size:13px;}
+.keyword-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px;margin:14px 0;}
+.keyword-chip{position:relative;background:#111b29;border:1px solid #52677c;border-radius:8px;padding:8px 34px 8px 10px;min-width:0;}
+.keyword-chip input{display:block;background:transparent;color:#f1f5f9;border:0;width:100%;font:inherit;padding:4px 0;outline-offset:2px;}.keyword-chip input+input{color:#a5d4ff;font-size:12px;}
+.keyword-chip button{position:absolute;right:2px;top:2px;background:transparent;color:#cbd5e1;padding:6px;}
+.quiet{background:#334155;color:#fff;padding:8px 12px;font-size:14px;}.inline-error{color:#fda4af!important;}
+.media-modal {max-width:1200px;padding:22px;}.media-modal header{position:sticky;top:-22px;background:#1c2635;z-index:2;padding:12px 0;}
+.media-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}.media-toolbar select{background:#111b29;color:white;border:1px solid #52677c;border-radius:8px;padding:10px;max-width:100%;}
+.remote-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;}.media-card{min-width:0;display:flex;flex-direction:column;border:1px solid #334155;border-radius:12px;overflow:hidden;background:#151e2b;padding-bottom:12px;}.media-card.selected{border-color:#e9ff38;}
+.media-preview{position:relative;}.media-preview img,.media-preview video{aspect-ratio:4/3;object-fit:contain;border-radius:0;}.pick{display:flex;gap:6px;align-items:center;padding:8px;background:#253247;font-size:12px;}.media-title{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.4;min-height:36px;margin:10px 10px 0;overflow-wrap:anywhere;}
+.query-label{padding:0 10px;overflow-wrap:anywhere;}.source-badge{display:flex;align-items:center;gap:6px;color:#d8e7ff;text-decoration:none;font-size:12px;margin:8px 10px 0;}.source-badge span{display:grid;place-items:center;width:22px;height:22px;border-radius:6px;background:#40516b;}
+.pagination{display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;margin:20px 0;}.pagination button{background:#334155;color:white;font-size:14px;}
+.selection-bar{position:sticky;bottom:-22px;background:#1c2635;border-top:1px solid #40516b;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 0;z-index:2;}
+.search-warnings,.empty{padding:14px;background:#302a1c;border-radius:8px;color:#ffe4ae;font-size:13px;margin-bottom:14px;}
+@media(max-width:900px){.remote-grid{grid-template-columns:repeat(3,minmax(0,1fr));}}
+@media(max-width:600px){main{padding:20px 14px;}header{font-size:17px;}.intro{margin:20px 0;}.intro p{font-size:20px;} .modal-backdrop{padding:0;}.media-modal{padding:14px;border:0;border-radius:0;min-height:100dvh;}.media-modal header{top:-14px;font-size:16px;}.remote-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}.selection-bar{bottom:-14px;font-size:13px;}.keyword-grid{grid-template-columns:1fr;}.article-import input{min-width:0;width:100%;flex-basis:100%;}.upload{padding:12px;}.upload input{max-width:100%;}.upload span{flex-basis:100%;}.tabs button{padding:10px;font-size:14px;}.media-toolbar select{width:100%;margin-bottom:12px;}.library input{min-width:0;max-width:100%;}.media-title{font-size:12px;}.pagination{gap:6px;}.pagination button{font-size:12px;padding:10px;}}

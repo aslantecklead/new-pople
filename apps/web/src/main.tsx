@@ -6,6 +6,8 @@ import './styles.css';
 // browser always talks to the same origin as the panel.
 const API_URL = import.meta.env.VITE_API_URL ?? '';
 
+type Keyword = {label:string; query:string};
+const sources: Record<string, {name:string; icon:string}> = {'coverr':{name:'Coverr',icon:'▶'}, 'yandex-images':{name:'Яндекс',icon:'Я'}, 'google-images':{name:'Google',icon:'G'}};
 type Project = { id: string; news_text: string; created_at: string };
 type LibraryAsset = { id: string; original_name: string; mime_type: string; tags: string[]; url: string };
 type SourceCredit = { source_provider: string; source_url: string; source_author?: string; source_license?: string };
@@ -31,6 +33,57 @@ function App() {
   const [articleUrl, setArticleUrl] = useState('');
   const [searching, setSearching] = useState(false);
   const [connectionError, setConnectionError] = useState<string>();
+
+  const [keywords, setKeywords] = useState<Keyword[]>([]);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [keywordError, setKeywordError] = useState('');
+  const [keywordMode, setKeywordMode] = useState('');
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [providerPage, setProviderPage] = useState(1);
+  const [displayPage, setDisplayPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [topicFilter, setTopicFilter] = useState('');
+  const [analysisAttempt, setAnalysisAttempt] = useState(0);
+
+  useEffect(() => {
+    const abort = new AbortController();
+    setKeywords([]); setKeywordError(''); setKeywordMode('');
+    if (newsText.trim().length < 20) {setAnalyzing(false); return;}
+    setAnalyzing(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`${API_URL}/api/keywords`, {method:'POST', headers:{'content-type':'application/json'},body:JSON.stringify({newsText}),signal:abort.signal});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error ?? 'Не удалось разобрать текст');
+        if (!abort.signal.aborted) {setKeywords(data.keywords);setKeywordMode('Темы выделены локальной нейросетью');}
+      } catch(error) {if (!abort.signal.aborted) setKeywordError(error instanceof Error?error.message:'Ошибка анализа');}
+      finally {if (!abort.signal.aborted) setAnalyzing(false);}
+    }, 900);
+    return () => {abort.abort();window.clearTimeout(timer);};
+  }, [newsText, analysisAttempt]);
+
+  async function fetchMedia(page:number, append=false) {
+    const response = await fetch(`${API_URL}/api/media/search`, {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({newsText,keywords:keywords.filter(k=>k.query.trim()),page}),signal:AbortSignal.timeout(150000)});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error ?? `Поиск: HTTP ${response.status}`);
+    setRemoteMedia(previous => {
+      const unique = new Map<string,RemoteMedia>();
+      for (const item of [...(append ? previous ?? []:[]),...data.items] as RemoteMedia[]) {
+        const key=item.previewUrl.split('?')[0].replace('/small_2x/','/small/');
+        if (!unique.has(key)) unique.set(key,item);
+      }
+      return [...unique.values()];
+    });
+    setWarnings(data.warnings ?? []); setHasMore(data.hasMore); setProviderPage(page);
+    return data.items.length;
+  }
+  async function loadMore() {
+    setLoadingMore(true);
+    try {const count=await fetchMedia(providerPage+1,true); if(!count)setWarnings(['Источник больше не вернул результатов. Измените запрос или выберите другую тему.']);}
+    catch(error){setWarnings([error instanceof Error?error.message:'Не удалось загрузить следующую страницу']);}
+    finally{setLoadingMore(false);}
+  }
 
   async function refreshProjects() {
     const response = await fetch(`${API_URL}/api/projects`);
@@ -96,13 +149,9 @@ function App() {
       await fetch(`${API_URL}/api/projects/${project.id}/assets/from-library`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ assetId }) });
     }
     setStatus('Ищу материалы в открытых источниках…');
-    const searchResponse = await fetch(`${API_URL}/api/media/search`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ newsText }), signal: AbortSignal.timeout(45_000) });
-    const search = await searchResponse.json();
-    if (!searchResponse.ok) return setStatus(search.error ?? `Поиск не запустился (HTTP ${searchResponse.status})`);
-    if (search.error) return setStatus(search.error);
-    setRemoteMedia(search.items ?? []);
-    setSelectedRemoteIds((search.items ?? []).slice(0, 5).map((item: RemoteMedia) => item.id));
-    setStatus(search.items?.length ? 'Материалы найдены — выбери кадры для монтажа' : 'Ничего не найдено: измени текст или добавь свои кадры');
+    const count = await fetchMedia(1);
+    setSelectedRemoteIds([]);setDisplayPage(1);setTopicFilter('');
+    setStatus(count ? 'Материалы найдены — выберите подходящие кадры' : 'По этим запросам ничего не найдено. Уточните ключевые слова.');
     void refreshProjects();
     } catch (error) {
       if (error instanceof Error && error.name === 'TimeoutError') {
@@ -177,25 +226,54 @@ function App() {
     setStatus(`Открыт проект от ${new Date(project.created_at).toLocaleString('ru-RU')}`);
   }
 
+  const filteredMedia=(remoteMedia??[]).filter(item=>item.kind===mediaTab && (!topicFilter||item.query===topicFilter));
+  const totalPages=Math.max(1,Math.ceil(filteredMedia.length/12));
+  const visibleMedia=filteredMedia.slice((displayPage-1)*12,displayPage*12);
   return <main>
     <header><span className="mark">НЛ</span><div><b>Автомонтаж новостей</b><small>локальная панель · серверный рендер</small></div></header>
-    <section className="intro"><p>Текст → сцены и поиск стоков → кадры → голос → субтитры → MP4.</p><span>{status}</span></section>
+    <section className="intro"><p>Создайте ролик из новости</p><span>{status}</span></section>
     {connectionError && <section className="error-panel" role="alert"><b>Не удалось связаться с сервером</b><p>{connectionError}</p><code>API: {API_URL}</code><button type="button" onClick={() => void checkConnection()}>Проверить связь</button></section>}
-    {projects.length > 0 && <section className="projects"><b>Сохранённые проекты</b><div>{projects.map((project) => <button type="button" key={project.id} onClick={() => void resumeProject(project)}>{project.news_text.slice(0, 64)}…</button>)}</div></section>}
+    {projects.length > 0 && <details className="projects"><summary>Сохранённые проекты</summary><div>{projects.map((project) => <button type="button" key={project.id} onClick={() => void resumeProject(project)}>{project.news_text.slice(0, 64)}…</button>)}</div></details>}
     <form onSubmit={startRender}>
       <div className="article-import"><input value={articleUrl} onChange={(e) => setArticleUrl(e.target.value)} placeholder="Ссылка на статью newpeople.ru/news/..." /><button type="button" onClick={() => void importArticle()}>Загрузить статью</button></div>
       <label htmlFor="news">Текст новости</label>
       <textarea id="news" value={newsText} onChange={(e) => setNewsText(e.target.value)} placeholder="Вставь текст новости. На сервере он станет раскадровкой и голосом." required />
+      <section className="keyword-panel">
+        <div className="section-title"><b>Темы для поиска</b><small>{analyzing?'Нейросеть анализирует текст…':keywordMode}</small></div>
+        <p>Русская тема и английский запрос. Нажмите на текст, чтобы изменить его.</p>
+        {keywordError && <div className="keyword-error" role="alert"><p>{keywordError}</p><button type="button" className="quiet" onClick={()=>setAnalysisAttempt(value=>value+1)}>Повторить анализ</button></div>}
+        <div className="keyword-grid">{keywords.map((k,i)=><div className="keyword-chip" key={i}>
+          <input aria-label={`Тема ${i+1}`} value={k.label} onChange={e=>setKeywords(old=>old.map((v,j)=>j===i?{...v,label:e.target.value}:v))}/>
+          <input aria-label={`Запрос ${i+1}`} value={k.query} placeholder="English search query" onChange={e=>setKeywords(old=>old.map((v,j)=>j===i?{...v,query:e.target.value}:v))}/>
+          <button type="button" aria-label={`Удалить тему ${i+1}`} onClick={()=>setKeywords(old=>old.filter((_,j)=>j!==i))}>×</button>
+        </div>)}</div>
+        <button type="button" className="quiet" disabled={analyzing||keywords.length>=12} onClick={()=>setKeywords(old=>[...old,{label:'Своя тема',query:''}])}>＋ Добавить тему</button>
+      </section>
       <div className="upload"><b>Свои кадры — необязательно</b><span>{files.length ? `Выбрано: ${files.map((file) => file.name).join(', ')}` : 'Без них сервер найдёт подходящие стоковые видео и картинки сам. Ваши кадры имеют приоритет.'}</span><input key={assetInputKey} type="file" accept="video/*,image/*" multiple onChange={(e) => setFiles(Array.from(e.target.files ?? []))} /></div>
-      <button className="primary" type="submit" disabled={searching}>{searching ? 'Ищу кадры…' : 'Найти кадры'}</button>
+      <button className="primary" type="submit" disabled={searching||analyzing||!keywords.some(k=>k.query.trim())}>{searching ? 'Ищу кадры…' : 'Найти кадры'}</button>
     </form>
-    <section className="library"><h2>Библиотека футажей</h2><p>Загрузи видео или картинку один раз, укажи теги — «Госдума, заседание, документы». Следующие новости смогут подобрать её сами.</p>
+    <details className="library"><summary>Моя библиотека футажей</summary><p>Загрузи видео или картинку один раз, укажи теги — «Госдума, заседание, документы». Следующие новости смогут подобрать её сами.</p>
       <form onSubmit={uploadToLibrary} className="library-form"><input type="file" accept="video/*,image/*" onChange={(e) => setLibraryFile(e.target.files?.[0])} /><input value={libraryTags} onChange={(e) => setLibraryTags(e.target.value)} placeholder="Теги через запятую" /><button type="submit">Добавить в библиотеку</button></form>
       <div className="search"><input value={libraryQuery} onChange={(e) => setLibraryQuery(e.target.value)} placeholder="Найти футажи по словам" /><button type="button" onClick={() => void searchLibrary()}>Искать</button></div>
       <div className="asset-grid">{library.map((asset) => <label className="asset" key={asset.id}><input type="checkbox" checked={selectedLibraryIds.includes(asset.id)} onChange={() => setSelectedLibraryIds((ids) => ids.includes(asset.id) ? ids.filter((id) => id !== asset.id) : [...ids, asset.id])} />{asset.mime_type.startsWith('image/') ? <img src={`${API_URL}${asset.url}`} /> : <video muted src={`${API_URL}${asset.url}`} />}<span>{asset.original_name}</span><small>{asset.tags?.join(', ')}</small></label>)}</div>
-    </section>
+    </details>
     {sourceCredits.length > 0 && <section className="credits"><b>Источники кадров</b>{sourceCredits.map((credit) => <a key={credit.source_url} href={credit.source_url} target="_blank" rel="noreferrer">{credit.source_provider}: {credit.source_author || 'автор'}{credit.source_license ? ` · ${credit.source_license}` : ''}</a>)}</section>}
-    {remoteMedia && <div className="modal-backdrop"><section className="media-modal"><header><b>Подбор кадров</b><button type="button" onClick={() => setRemoteMedia(undefined)}>Закрыть</button></header><p>Открытые источники · выбери до восьми материалов, затем сервис скачает их и соберёт ролик.</p><div className="tabs"><button type="button" className={mediaTab === 'video' ? 'active' : ''} onClick={() => setMediaTab('video')}>Видео ({remoteMedia.filter((item) => item.kind === 'video').length})</button><button type="button" className={mediaTab === 'photo' ? 'active' : ''} onClick={() => setMediaTab('photo')}>Фото ({remoteMedia.filter((item) => item.kind === 'photo').length})</button></div><div className="remote-grid">{remoteMedia.filter((item) => item.kind === mediaTab).map((item) => <label className="asset" key={item.id}><input type="checkbox" checked={selectedRemoteIds.includes(item.id)} onChange={() => setSelectedRemoteIds((ids) => ids.includes(item.id) ? ids.filter((id) => id !== item.id) : ids.length < 8 ? [...ids, item.id] : ids)} />{item.kind === 'photo' ? <img src={item.previewUrl} /> : <video muted controls preload="metadata" src={item.previewUrl} />}<span>{item.title}</span><small>{item.provider} · {item.query}</small><a href={item.sourceUrl} target="_blank" rel="noreferrer">Источник</a></label>)}</div><button className="primary" type="button" onClick={() => void startMontage()} disabled={!selectedRemoteIds.length}>Скачать выбранное и собрать ролик</button></section></div>}
+    {remoteMedia && <div className="modal-backdrop"><section className="media-modal" role="dialog" aria-modal="true" aria-label="Подбор кадров">
+      <header><div><b>Подбор кадров</b><small>Выберите до 8 материалов для ролика</small></div><button type="button" onClick={()=>setRemoteMedia(undefined)}>Закрыть</button></header>
+      <div className="media-toolbar"><div className="tabs">{(['video','photo'] as const).map(kind=><button type="button" key={kind} className={mediaTab===kind?'active':''} onClick={()=>{setMediaTab(kind);setDisplayPage(1);}}>{kind==='video'?'Видео':'Фото'} ({remoteMedia.filter(m=>m.kind===kind).length})</button>)}</div>
+      <select aria-label="Фильтр по теме" value={topicFilter} onChange={e=>{setTopicFilter(e.target.value);setDisplayPage(1);}}><option value="">Все темы</option>{keywords.map((k,i)=><option key={i} value={k.query}>{k.label}</option>)}</select></div>
+      {warnings.length>0&&<details className="search-warnings"><summary>Некоторые источники не ответили ({warnings.length})</summary>{warnings.map((w,i)=><p key={i}>{w}</p>)}</details>}
+      {!filteredMedia.length&&<p className="empty">По этой теме материалов нет. Вернитесь к тексту и уточните поисковый запрос.</p>}
+      <div className="remote-grid">{visibleMedia.map(item=><article className={`asset media-card ${selectedRemoteIds.includes(item.id)?'selected':''}`} key={item.id}>
+        <div className="media-preview">{item.kind==='photo'?<img loading="lazy" src={item.previewUrl} alt={item.title}/>:<video controls muted preload="none" src={item.previewUrl}/>}
+        <label className="pick"><input type="checkbox" aria-label={`Выбрать ${item.title}`} checked={selectedRemoteIds.includes(item.id)} onChange={()=>setSelectedRemoteIds(ids=>ids.includes(item.id)?ids.filter(id=>id!==item.id):ids.length<8?[...ids,item.id]:ids)}/> Выбрать</label></div>
+        <span className="media-title" title={item.title}>{item.title}</span><small className="query-label">{item.query}</small>
+        <a className="source-badge" href={item.sourceUrl} target="_blank" rel="noreferrer"><span aria-hidden="true">{sources[item.provider]?.icon??'↗'}</span>{sources[item.provider]?.name??item.provider} ↗</a>
+      </article>)}</div>
+      <div className="pagination"><button type="button" disabled={displayPage<=1} onClick={()=>setDisplayPage(p=>p-1)}>← Назад</button><span>{displayPage} / {totalPages}</span><button type="button" disabled={displayPage>=totalPages} onClick={()=>setDisplayPage(p=>p+1)}>Далее →</button>
+      <button type="button" disabled={loadingMore||!hasMore} onClick={()=>void loadMore()}>{loadingMore?'Загружаю…':'Ещё из источников'}</button></div>
+      <footer className="selection-bar"><span>Выбрано {selectedRemoteIds.length} / 8</span><button className="primary" type="button" onClick={()=>void startMontage()} disabled={!selectedRemoteIds.length}>Собрать ролик</button></footer>
+    </section></div>}
     {outputUrl && <section className="output"><b>Готовый черновик</b><video controls src={outputUrl} /> <a href={outputUrl} download>Скачать MP4</a></section>}
   </main>;
 }
