@@ -132,16 +132,22 @@ async function searchNasa(scene: Scene): Promise<StockAsset[]> {
 async function searchCoverr(scene: Scene): Promise<StockAsset[]> {
   const key = process.env.COVERR_API_KEY;
   if (!key) return [];
-  // Some searches have no vertical result at Coverr. Crop happens in the renderer,
-  // so returning a relevant landscape clip is preferable to returning no video.
-  const params = new URLSearchParams({ query: scene.query, page_size: '6', urls: 'true', sort: 'trending' });
-  const response = await fetch(`https://api.coverr.co/videos?${params}`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(20_000) });
-  if (!response.ok) return [];
-  const data = await response.json() as { hits?: Array<{ id?: string; title?: string; urls?: { mp4_download?: string; mp4_preview?: string; mp4?: string }; mp4_download?: string; thumbnail?: string }> };
-  return (data.hits ?? []).flatMap((item) => {
+  const search = async (query: string) => {
+    // Some searches have no vertical result at Coverr. Crop happens in the renderer,
+    // so returning a relevant landscape clip is preferable to returning no video.
+    const params = new URLSearchParams({ query, page_size: '6', urls: 'true', sort: 'trending' });
+    const response = await fetch(`https://api.coverr.co/videos?${params}`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(20_000) });
+    if (!response.ok) return [];
+    const data = await response.json() as { hits?: Array<{ id?: string; slug?: string; title?: string; urls?: { mp4_download?: string; mp4_preview?: string; mp4?: string }; mp4_download?: string }> };
+    return (data.hits ?? []).flatMap((item) => {
     const url = item.urls?.mp4_download ?? item.urls?.mp4 ?? item.mp4_download;
-    return url ? [{ downloadUrl: url, extension: '.mp4', mimeType: 'video/mp4', originalName: `coverr-${item.id ?? randomUUID()}.mp4`, sourceProvider: 'coverr' as const, sourceUrl: `https://coverr.co/videos/${item.id ?? ''}`, sourceLicense: 'Coverr License', tags: [scene.query] }] : [];
-  });
+      return url ? [{ downloadUrl: url, extension: '.mp4', mimeType: 'video/mp4', originalName: item.title ? `${item.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')}.mp4` : `coverr-${item.id ?? randomUUID()}.mp4`, sourceProvider: 'coverr' as const, sourceUrl: `https://coverr.co/videos/${item.slug ?? item.id ?? ''}`, sourceLicense: 'Coverr License', tags: [scene.query] }] : [];
+    });
+  };
+  const contextual = await search(scene.query);
+  if (contextual.length) return contextual;
+  const backupQuery = /government|parliament|polit|press|diplomat|meeting|document|military|war/i.test(scene.query) ? 'news' : /family|child|school|health/i.test(scene.query) ? 'people' : 'business';
+  return search(backupQuery);
 }
 
 function uniqueUrls(html: string, expression: RegExp) {
