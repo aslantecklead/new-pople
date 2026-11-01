@@ -47,9 +47,23 @@ app.get('/health', async () => ({
   stockSearch: {
     wikimediaCommons: process.env.WIKIMEDIA_COMMONS_ENABLED !== 'false',
     pexels: Boolean(process.env.PEXELS_API_KEY),
+    coverr: Boolean(process.env.COVERR_API_KEY),
     localStoryboardModel: Boolean(process.env.OLLAMA_BASE_URL && process.env.OLLAMA_MODEL),
   },
 }));
+
+app.post<{ Body: { url: string } }>('/api/articles/import', async (request, reply) => {
+  const url = request.body?.url?.trim();
+  if (!url || !/^https:\/\/newpeople\.ru\/news\//.test(url)) return reply.code(400).send({ error: 'Поддерживаются ссылки newpeople.ru/news/...' });
+  try {
+    const response = await fetch(url, { headers: { 'user-agent': 'NewsVideoFactory/0.1' }, signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) return reply.code(502).send({ error: 'Страница статьи недоступна' });
+    const html = await response.text();
+    const meta = (property: string) => html.match(new RegExp(`<meta[^>]+(?:property|name)=["']${property}["'][^>]+content=["']([^"']+)`, 'i'))?.[1];
+    const body = (html.match(/<article[\s\S]*?<\/article>/i)?.[0] ?? html).replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<[^>]+>/gi, ' ').replace(/&nbsp;|&quot;|&laquo;|&raquo;/g, ' ').replace(/\s+/g, ' ').trim();
+    return { title: meta('og:title') ?? '', text: body.slice(0, 12_000), imageUrl: meta('og:image') ?? '', sourceUrl: url };
+  } catch { return reply.code(502).send({ error: 'Не удалось загрузить статью' }); }
+});
 
 app.get('/api/projects', async () => {
   const { rows } = await db.query('SELECT * FROM projects ORDER BY created_at DESC LIMIT 30');

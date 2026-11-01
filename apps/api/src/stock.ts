@@ -11,7 +11,7 @@ type StockAsset = {
   extension: string;
   mimeType: string;
   originalName: string;
-  sourceProvider: 'pexels' | 'wikimedia-commons' | 'nasa';
+  sourceProvider: 'pexels' | 'wikimedia-commons' | 'nasa' | 'coverr';
   sourceUrl: string;
   sourceAuthor?: string;
   sourceLicense?: string;
@@ -129,6 +129,19 @@ async function searchNasa(scene: Scene): Promise<StockAsset[]> {
   });
 }
 
+async function searchCoverr(scene: Scene): Promise<StockAsset[]> {
+  const key = process.env.COVERR_API_KEY;
+  if (!key) return [];
+  const params = new URLSearchParams({ query: scene.query, page_size: '6', urls: 'true', sort: 'trending', filter: 'is_vertical:true' });
+  const response = await fetch(`https://api.coverr.co/videos?${params}`, { headers: { 'x-api-key': key }, signal: AbortSignal.timeout(20_000) });
+  if (!response.ok) return [];
+  const data = await response.json() as { hits?: Array<{ id?: string; title?: string; urls?: { mp4_download?: string; mp4_preview?: string; mp4?: string }; mp4_download?: string; thumbnail?: string }> };
+  return (data.hits ?? []).flatMap((item) => {
+    const url = item.urls?.mp4_download ?? item.urls?.mp4 ?? item.mp4_download;
+    return url ? [{ downloadUrl: url, extension: '.mp4', mimeType: 'video/mp4', originalName: `coverr-${item.id ?? randomUUID()}.mp4`, sourceProvider: 'coverr' as const, sourceUrl: `https://coverr.co/videos/${item.id ?? ''}`, sourceLicense: 'Coverr License', tags: [scene.query] }] : [];
+  });
+}
+
 export async function downloadSelectedStock(asset: StockAsset, projectId: string, mediaRoot: string, db: Pool) {
   const response = await fetch(asset.downloadUrl, { signal: AbortSignal.timeout(120_000) });
   if (!response.ok || !response.body) throw new Error(`cannot download ${asset.sourceProvider} media`);
@@ -148,7 +161,7 @@ export async function downloadAutomaticStock(text: string, projectId: string, me
   const assets: Array<{ object_key: string; mime_type: string }> = [];
   for (const scene of scenes) {
     try {
-      const candidate = (await searchWikimediaCommons(scene))[0] ?? await findOnPexels(scene);
+      const candidate = (await searchCoverr(scene))[0] ?? await findOnPexels(scene);
       if (candidate) assets.push(await downloadSelectedStock(candidate, projectId, mediaRoot, db));
     } catch {
       // One unavailable source must not cancel the whole video; the next scene or local library can still render.
@@ -164,11 +177,7 @@ export async function searchRemoteMedia(text: string) {
   const cached = searchCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.items;
   const scenes = await createStoryboard(text);
-  const found = (await Promise.all(scenes.map(async (scene) => {
-    const commons = (await searchWikimediaCommons(scene)).slice(0, 4);
-    const nasa = (await searchNasa(scene)).slice(0, 1);
-    return [...commons, ...nasa].map((asset) => ({ scene, asset }));
-  })))
+  const found = (await Promise.all(scenes.map(async (scene) => (await searchCoverr(scene)).slice(0, 5).map((asset) => ({ scene, asset })))))
     .flat().slice(0, 20);
   const items = found.map(({ scene, asset }) => {
     const id = randomUUID();

@@ -26,6 +26,7 @@ function App() {
   const [remoteMedia, setRemoteMedia] = useState<RemoteMedia[] | undefined>();
   const [selectedRemoteIds, setSelectedRemoteIds] = useState<string[]>([]);
   const [mediaTab, setMediaTab] = useState<'video' | 'photo'>('video');
+  const [articleUrl, setArticleUrl] = useState('');
 
   async function refreshProjects() {
     const response = await fetch(`${API_URL}/api/projects`);
@@ -84,6 +85,17 @@ function App() {
     }
   }
 
+  async function importArticle() {
+    if (!articleUrl) return;
+    setStatus('Загружаю текст и обложку статьи…');
+    try {
+      const result = await fetch(`${API_URL}/api/articles/import`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: articleUrl }), signal: AbortSignal.timeout(35_000) }).then((response) => response.json());
+      if (result.error) return setStatus(result.error);
+      setNewsText(result.text);
+      setStatus('Статья загружена: проверь текст и найди кадры');
+    } catch { setStatus('Не удалось загрузить статью'); }
+  }
+
   async function startMontage() {
     if (!activeProjectId) return;
     try {
@@ -137,6 +149,7 @@ function App() {
     <section className="intro"><p>Текст → сцены и поиск стоков → кадры → голос → субтитры → MP4.</p><span>{status}</span></section>
     {projects.length > 0 && <section className="projects"><b>Сохранённые проекты</b><div>{projects.map((project) => <button type="button" key={project.id} onClick={() => void resumeProject(project)}>{project.news_text.slice(0, 64)}…</button>)}</div></section>}
     <form onSubmit={startRender}>
+      <div className="article-import"><input value={articleUrl} onChange={(e) => setArticleUrl(e.target.value)} placeholder="Ссылка на статью newpeople.ru/news/..." /><button type="button" onClick={() => void importArticle()}>Загрузить статью</button></div>
       <label htmlFor="news">Текст новости</label>
       <textarea id="news" value={newsText} onChange={(e) => setNewsText(e.target.value)} placeholder="Вставь текст новости. На сервере он станет раскадровкой и голосом." required />
       <div className="upload"><b>Свои кадры — необязательно</b><span>{files.length ? `Выбрано: ${files.map((file) => file.name).join(', ')}` : 'Без них сервер найдёт подходящие стоковые видео и картинки сам. Ваши кадры имеют приоритет.'}</span><input key={assetInputKey} type="file" accept="video/*,image/*" multiple onChange={(e) => setFiles(Array.from(e.target.files ?? []))} /></div>
