@@ -2,7 +2,9 @@ import { FormEvent, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8080';
+// Vite proxies these paths through the local SSH tunnel in development, so the
+// browser always talks to the same origin as the panel.
+const API_URL = import.meta.env.VITE_API_URL ?? '';
 
 type Project = { id: string; news_text: string; created_at: string };
 type LibraryAsset = { id: string; original_name: string; mime_type: string; tags: string[]; url: string };
