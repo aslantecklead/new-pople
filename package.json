@@ -1,0 +1,11 @@
+{
+  "name": "news-video-factory",
+  "private": true,
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev:web": "npm run dev --workspace=@factory/web",
+    "dev:api": "npm run dev --workspace=@factory/api",
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  }
+}

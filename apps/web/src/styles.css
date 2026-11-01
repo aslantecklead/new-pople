@@ -1,0 +1,32 @@
+:root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #f8f9fb; background: #10151f; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+main { max-width: 860px; margin: 0 auto; padding: 52px 24px; }
+header { display: flex; align-items: center; gap: 14px; font-size: 20px; }
+header small { display: block; font-size: 13px; color: #aab4c1; font-weight: 400; margin-top: 3px; }
+.mark { display: grid; place-items: center; width: 46px; height: 46px; background: #fff; color: #151922; font-weight: 900; transform: rotate(-4deg); }
+.intro { margin: 48px 0 22px; padding: 26px; background: #1c2635; border-radius: 20px; }
+.intro p { font-size: 22px; line-height: 1.35; margin: 0 0 12px; }
+.intro span { color: #b8c4d5; font-size: 14px; }
+form { display: grid; gap: 12px; }
+label, .upload b { font-size: 15px; }
+textarea { min-height: 220px; resize: vertical; padding: 18px; border: 1px solid #334155; border-radius: 14px; color: inherit; background: #171e2a; font: inherit; line-height: 1.5; }
+.upload { display: flex; align-items: center; gap: 13px; flex-wrap: wrap; padding: 18px; border: 1px dashed #56667c; border-radius: 14px; color: #c7d0dd; }
+.upload span { flex: 1; font-size: 14px; }
+button { border: 0; border-radius: 10px; padding: 12px 16px; font: inherit; cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .45; }
+.primary { background: #e9ff38; color: #11170d; font-weight: 800; justify-self: start; padding: 14px 21px; }
+.output { display: grid; gap: 12px; margin-top: 26px; padding: 20px; background: #1c2635; border-radius: 16px; }
+.output video { width: min(100%, 360px); border-radius: 10px; background: #000; }
+.output a { color: #e9ff38; font-weight: 700; }
+.projects, .library { margin-top: 26px; padding: 20px; background: #1c2635; border-radius: 16px; }
+.projects > div { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.projects button, .library button { background: #334155; color: #fff; }
+.library h2 { margin-top: 0; }
+.library p { color: #b8c4d5; line-height: 1.45; }
+.library-form, .search { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0; }
+.library input { min-width: 190px; padding: 10px; border-radius: 8px; border: 1px solid #56667c; color: inherit; background: #171e2a; }
+.asset-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.asset { display: grid; gap: 5px; color: #dce4ee; font-size: 13px; }
+.asset img, .asset video { width: 100%; aspect-ratio: 9 / 14; object-fit: cover; border-radius: 8px; background: #000; }
+.asset small { color: #94a3b8; }
