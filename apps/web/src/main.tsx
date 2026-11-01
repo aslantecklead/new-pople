@@ -10,6 +10,7 @@ type LibraryAsset = { id: string; original_name: string; mime_type: string; tags
 function App() {
   const [newsText, setNewsText] = useState('');
   const [files, setFiles] = useState<File[]>([]);
+  const [assetInputKey, setAssetInputKey] = useState(0);
   const [status, setStatus] = useState('Сервер не проверен');
   const [outputUrl, setOutputUrl] = useState<string>();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -50,6 +51,10 @@ function App() {
       data.append('file', file);
       const upload = await fetch(`${API_URL}/api/projects/${project.id}/assets`, { method: 'POST', body: data }).then((r) => r.json());
       if (upload.error) return setStatus(upload.error);
+    }
+    if (files.length) {
+      setFiles([]);
+      setAssetInputKey((value) => value + 1);
     }
     for (const assetId of selectedLibraryIds) {
       await fetch(`${API_URL}/api/projects/${project.id}/assets/from-library`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ assetId }) });
@@ -97,7 +102,7 @@ function App() {
     <form onSubmit={startRender}>
       <label htmlFor="news">Текст новости</label>
       <textarea id="news" value={newsText} onChange={(e) => setNewsText(e.target.value)} placeholder="Вставь текст новости. На сервере он станет раскадровкой и голосом." required />
-      <div className="upload"><b>Кадры проекта</b><span>{files.length ? `Выбрано: ${files.map((file) => file.name).join(', ')}` : 'Видео или изображения. Если не прикладывать кадры — соберётся текстовая карточка.'}</span><input type="file" accept="video/*,image/*" multiple onChange={(e) => setFiles(Array.from(e.target.files ?? []))} /></div>
+      <div className="upload"><b>Кадры проекта</b><span>{files.length ? `Выбрано: ${files.map((file) => file.name).join(', ')}` : 'Видео или изображения. Если не прикладывать кадры — соберётся текстовая карточка.'}</span><input key={assetInputKey} type="file" accept="video/*,image/*" multiple onChange={(e) => setFiles(Array.from(e.target.files ?? []))} /></div>
       <button className="primary" type="submit">Собрать черновик</button>
     </form>
     <section className="library"><h2>Библиотека футажей</h2><p>Загрузи видео или картинку один раз, укажи теги — «Госдума, заседание, документы». Следующие новости смогут подобрать её сами.</p>
