@@ -16,7 +16,11 @@ Self-hosted Telegram-бот принимает текст новости, дел
 - очередь BullMQ, прогресс рендера, отмена и отправка готового MP4 в Telegram;
 - PostgreSQL, Redis, Ollama, FFmpeg и все сервисы в Docker Compose.
 
-Подробный продуктовый и технический план: [docs/TELEGRAM_BOT_PLAN.md](docs/TELEGRAM_BOT_PLAN.md).
+Инструкции:
+
+- [развёртывание на Windows-сервере](docs/REMOTE_SETUP.md);
+- [продуктовый и технический план](docs/TELEGRAM_BOT_PLAN.md);
+- [устройство видеопайплайна](docs/VIDEO_PIPELINE.md).
 
 ## Что нужно получить перед запуском
 
@@ -28,6 +32,8 @@ Self-hosted Telegram-бот принимает текст новости, дел
 Секреты не добавляются в Git.
 
 ## Запуск на сервере
+
+Полный пошаговый туториал с обновлением, логами, резервным копированием и восстановлением Docker: [docs/REMOTE_SETUP.md](docs/REMOTE_SETUP.md).
 
 Создайте `.env` рядом с `docker-compose.server.yml` по образцу `.env.example`:
 

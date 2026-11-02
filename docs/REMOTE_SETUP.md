@@ -1,139 +1,189 @@
-# Удалённая работа: сервер, панель и туннель
+# Развёртывание Telegram-бота на Windows-сервере
 
-## Что где запускается
+Эта инструкция поднимает весь MVP на одном Windows-сервере через Docker Desktop. После запуска бот работает по long polling: пользоваться им можно с телефона через обычный Telegram, открывать порты в интернет и держать компьютер редактора включённым не нужно.
 
-| Компонент | Где работает | Адрес |
-| --- | --- | --- |
-| API, очередь, PostgreSQL, Redis, Ollama, файлы проектов | Windows-сервер в Docker | `127.0.0.1:8080` на сервере |
-| Панель редактора | Mac или рабочий компьютер | `http://127.0.0.1:5173` |
-| SSH-туннель | Компьютер редактора | `127.0.0.1:18080` → сервер `127.0.0.1:8080` |
+## 1. Что потребуется
 
-Компьютер и сервер не обязаны находиться в одной Wi-Fi-сети. Они должны быть
-авторизованы в одном tailnet Tailscale и быть доступны друг другу.
+- Windows 10/11 или Windows Server с включённой виртуализацией;
+- Docker Desktop в режиме Linux containers;
+- Git;
+- минимум 25 ГБ свободного места на диске;
+- Telegram-токен от `@BotFather`;
+- числовой Telegram ID владельца (можно узнать через `@userinfobot`).
 
-## Развёртывание сервера один раз
+Репозиторий: <https://github.com/aslantecklead/new-pople>
 
-На Windows установите Docker Desktop, Git, Tailscale и OpenSSH Server. Затем
-в PowerShell:
+## 2. Установка и клонирование
+
+Откройте PowerShell от обычного пользователя, под которым работает Docker Desktop:
 
 ```powershell
 git clone https://github.com/aslantecklead/new-pople.git C:\Users\aleck\news-video-factory
 Set-Location C:\Users\aleck\news-video-factory
 Copy-Item .env.example .env
-# Откройте .env и задайте уникальный POSTGRES_PASSWORD и COVERR_API_KEY.
-docker compose -f docker-compose.server.yml up -d --build
-docker compose -f docker-compose.server.yml exec -T ollama ollama pull qwen2.5:3b
-Invoke-RestMethod http://127.0.0.1:8080/health
+notepad .env
 ```
 
-`/health` должен вернуть JSON с `"ok": true`. Проекты и медиа находятся в
-именованных Docker volumes, поэтому переживают пересборку контейнеров.
-
-Первая загрузка `qwen2.5:3b` занимает около 1,9 ГБ. Её можно запустить в фоне,
-чтобы не держать SSH-окно открытым:
+Если каталог уже существует:
 
 ```powershell
-Start-Process docker -ArgumentList @(
-  'compose', '-f', 'docker-compose.server.yml', 'exec', '-T',
-  'ollama', 'ollama', 'pull', 'qwen2.5:3b'
-) -WorkingDirectory (Get-Location) `
-  -RedirectStandardOutput .\ollama-pull.log `
-  -RedirectStandardError .\ollama-pull.err
-
-Get-Content .\ollama-pull.log -Wait
-docker compose -f docker-compose.server.yml exec -T ollama ollama list
+Set-Location C:\Users\aleck\news-video-factory
+git pull --ff-only
 ```
 
-Модель готова, когда `ollama list` показывает `qwen2.5:3b`. После этого
-`POST /api/keywords` использует её для выделения поисковых тем.
+## 3. Настройка `.env`
 
-## Подключение нового Mac или рабочего компьютера
+Заполните файл `.env` рядом с `docker-compose.server.yml`:
 
-1. Войдите в Tailscale под тем же аккаунтом и убедитесь, что виден Windows-сервер.
-2. Добавьте публичный SSH-ключ рабочего компьютера в
-   `C:\ProgramData\ssh\administrators_authorized_keys` на Windows.
-3. Склонируйте этот репозиторий и установите зависимости:
+```dotenv
+TELEGRAM_BOT_TOKEN=PASTE_BOTFATHER_TOKEN_HERE
+ALLOWED_TELEGRAM_IDS=123456789
+ALLOWED_TELEGRAM_USERNAMES=aslandevx
+TELEGRAM_API_ROOT=https://api.telegram.org
 
-   ```bash
-   git clone https://github.com/aslantecklead/new-pople.git
-   cd new-pople
-   npm install
-   ```
-
-4. Откройте постоянный туннель. Замените путь к ключу и Tailscale IP на свои:
-
-   ```bash
-   ssh -N \
-     -L 127.0.0.1:18080:127.0.0.1:8080 \
-     -o ExitOnForwardFailure=yes \
-     -o ServerAliveInterval=20 \
-     -o ServerAliveCountMax=3 \
-     -i ~/.ssh/news-video-factory-deploy \
-     aleck@100.78.232.27
-   ```
-
-5. В другом окне запустите панель:
-
-   ```bash
-   npm run dev:web
-   ```
-
-   Откройте `http://127.0.0.1:5173`. Проверка должна пройти по адресу
-   `http://127.0.0.1:5173/health`.
-
-## Постоянный туннель на macOS
-
-На основном Mac туннель уже установлен как LaunchAgent
-`com.newpeople.news-video-factory-tunnel`: он стартует при входе в систему и
-перезапускается при обрыве SSH. Его состояние и лог:
-
-```bash
-launchctl print gui/$(id -u)/com.newpeople.news-video-factory-tunnel
-tail -f /tmp/news-video-factory-tunnel.log
+API_PORT=8080
+POSTGRES_DB=video_factory
+POSTGRES_USER=video_factory
+POSTGRES_PASSWORD=PASTE_A_LONG_RANDOM_PASSWORD_HERE
+REDIS_URL=redis://redis:6379
+OLLAMA_MODEL=qwen3.5:4b
 ```
 
-Для другого Mac скрипт установит такой же LaunchAgent:
+Важное:
 
-```bash
-SERVER=100.78.232.27 SSH_USER=aleck SSH_KEY="$HOME/.ssh/news-video-factory-deploy" \
-  ./scripts/install-macos-tunnel.sh
+- токен и пароль не отправляйте в Git;
+- лучше указывать `ALLOWED_TELEGRAM_IDS`: числовой ID не меняется вместе с username;
+- `ALLOWED_TELEGRAM_USERNAMES` можно оставить как запасной способ входа;
+- если оба списка доступа пустые, бот будет доступен любому пользователю;
+- при смене пароля уже созданной PostgreSQL-базы значение в volume автоматически не изменится. Для действующего сервера оставляйте текущий пароль.
+
+## 4. Первый запуск
+
+Убедитесь, что Docker Desktop полностью запущен, затем выполните:
+
+```powershell
+Set-Location C:\Users\aleck\news-video-factory
+docker compose -f docker-compose.server.yml up -d --build
 ```
 
-Важно привязывать локальный порт к `127.0.0.1`, а не к `0.0.0.0`.
+Первый запуск может занять 10–30 минут: будут загружены контейнеры, локальная Ollama-модель и три русских голоса Piper. Закрывать PowerShell после завершения команды можно — контейнеры продолжат работать в фоне и автоматически поднимутся после перезапуска Docker.
 
-## Проверка связи
+Проверьте состояние:
 
-На Mac:
-
-```bash
-tailscale ping 100.78.232.27
-curl http://127.0.0.1:18080/health
-curl http://127.0.0.1:5173/health
+```powershell
+docker compose -f docker-compose.server.yml ps
+Invoke-RestMethod http://127.0.0.1:8080/health
+docker compose -f docker-compose.server.yml logs --tail 100 bot worker ollama-pull
 ```
 
-Первый тест проверяет Tailscale, второй — SSH-туннель и серверный API, третий —
-полную цепочку через Vite-прокси. Если первый тест не отвечает, локальная сеть
-не имеет значения: перезапустите службу Tailscale на Windows и проверьте, что
-компьютер не ушёл в сон.
+Ожидаемый результат:
 
-## Обновление после `git push`
+- `postgres`, `redis`, `ollama`, `api`, `bot` и `worker` запущены;
+- `ollama-pull` завершён с кодом `0` — это одноразовый загрузчик модели;
+- `/health` возвращает JSON с `"ok": true`;
+- в логах `bot` нет повторяющихся ошибок авторизации Telegram.
 
-На Windows:
+Теперь откройте созданного бота с телефона и отправьте `/start`.
+
+## 5. Как пользоваться ботом
+
+1. Нажмите «Новый проект».
+2. Отправьте исходный текст новости.
+3. Выберите 30 или 60 секунд, стиль и вариант переработки текста.
+4. При необходимости перегенерируйте или отредактируйте итоговый текст.
+5. Отправляйте видео и изображения по одному или группой.
+6. Откройте «Материалы»: там доступны порядок, описание кадра, обрезка начала/конца, кадрирование, замена и удаление.
+7. В «Настройках» выберите голос, шрифт, цвет и размер субтитров.
+8. Нажмите «Сгенерировать видео» и дождитесь MP4 в чате.
+
+Кнопки просмотра текущего текста, материалов, настроек и проектов постоянно доступны в нижнем меню. По умолчанию используется приятный женский голос, светло-голубые анимированные субтитры и логотип «Новых людей».
+
+## 6. Обновление с GitHub
 
 ```powershell
 Set-Location C:\Users\aleck\news-video-factory
 git pull --ff-only
 docker compose -f docker-compose.server.yml up -d --build
+docker compose -f docker-compose.server.yml ps
 Invoke-RestMethod http://127.0.0.1:8080/health
 ```
 
-Не публикуйте порт `8080` в интернет и не коммитьте `.env` или SSH-ключи.
+Обычное обновление не удаляет проекты, медиа, базу и Ollama-модель: они хранятся в именованных Docker volumes.
 
-## Текущее развёртывание
+## 7. Полезные команды
 
-Windows-сервер использует каталог `C:\Users\aleck\news-video-factory`, ветку
-`main` и Docker Compose. На нём установлены Git, контейнеры `api`, `worker`,
-`postgres`, `redis`, `ollama` и модель `qwen2.5:3b`. Обновление выполняется
-командами из раздела выше; данные PostgreSQL, Redis, медиафайлы и модели Ollama
-лежат в Docker volumes и не удаляются при `git pull` или пересборке `api` и
-`worker`.
+Логи в реальном времени:
+
+```powershell
+docker compose -f docker-compose.server.yml logs -f bot worker
+```
+
+Перезапуск только бота и рендера:
+
+```powershell
+docker compose -f docker-compose.server.yml restart bot worker
+```
+
+Остановка и повторный запуск без удаления данных:
+
+```powershell
+docker compose -f docker-compose.server.yml down
+docker compose -f docker-compose.server.yml up -d
+```
+
+Не используйте `docker compose down -v`: ключ `-v` удалит базу проектов, исходники и локальную модель.
+
+## 8. Резервная копия
+
+Создайте каталог для бэкапов и выгрузите PostgreSQL:
+
+```powershell
+Set-Location C:\Users\aleck\news-video-factory
+New-Item -ItemType Directory -Force .\backups | Out-Null
+docker compose -f docker-compose.server.yml exec -T postgres `
+  pg_dump -U video_factory -d video_factory `
+  | Set-Content -Encoding utf8 .\backups\video_factory.sql
+```
+
+Для полного бэкапа медиа дополнительно экспортируйте volume `media-data` либо копируйте каталог из временного контейнера. Имя volume сначала можно увидеть командой:
+
+```powershell
+docker volume ls
+```
+
+## 9. Если закончилось место
+
+Проверьте свободное место:
+
+```powershell
+Get-Volume -DriveLetter C
+docker system df
+```
+
+Безопасно удалить только кэш незавершённых сборок:
+
+```powershell
+docker builder prune -af
+```
+
+После полного заполнения диска Docker Desktop иногда не запускает Linux engine. Освободите несколько гигабайт на диске, затем:
+
+```powershell
+wsl --shutdown
+Restart-Service com.docker.service
+Start-Process 'C:\Program Files\Docker\Docker\Docker Desktop.exe'
+```
+
+Не удаляйте Docker volumes, пока не сделали резервную копию.
+
+## 10. Ограничение размера файлов Telegram
+
+По умолчанию используется официальный Bot API. Для первого MVP отправляйте короткие исходники. Если нужны большие видеофайлы, следующим этапом разверните локальный Telegram Bot API и поменяйте `TELEGRAM_API_ROOT` в `.env`; остальная архитектура бота останется прежней.
+
+## 11. Безопасность
+
+- не публикуйте `.env`, токен, пароль базы и SSH-ключи;
+- оставьте доступ только своему числовому Telegram ID;
+- API-порт `8080` не нужен телефону и не должен быть открыт в интернет;
+- при случайной публикации токена сразу перевыпустите его через `@BotFather`;
+- регулярно проверяйте свободное место: рендеры и загруженные исходники остаются в `media-data`.
