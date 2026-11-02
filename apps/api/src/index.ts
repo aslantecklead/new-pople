@@ -7,6 +7,7 @@ import Fastify from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream, mkdirSync } from 'node:fs';
 import { basename, extname, join } from 'node:path';
+import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { Pool } from 'pg';
 import { renderQueue } from './queue.js';
@@ -31,6 +32,7 @@ await app.register(cors, {
 await app.register(multipart, { limits: { fileSize: 1_500_000_000, files: 20 } });
 await app.register(fastifyStatic, { root: mediaRoot, prefix: '/media/' });
 await db.query('ALTER TABLE render_jobs ADD COLUMN IF NOT EXISTS output_path TEXT');
+await db.query('ALTER TABLE render_jobs ADD COLUMN IF NOT EXISTS error_message TEXT');
 await db.query('ALTER TABLE assets ADD COLUMN IF NOT EXISTS source_provider TEXT');
 await db.query('ALTER TABLE assets ADD COLUMN IF NOT EXISTS source_url TEXT');
 await db.query('ALTER TABLE assets ADD COLUMN IF NOT EXISTS source_author TEXT');
@@ -52,6 +54,35 @@ app.get('/health', async () => ({
     localStoryboardModel: Boolean(process.env.OLLAMA_BASE_URL && process.env.OLLAMA_MODEL),
   },
 }));
+
+// Browser video elements make byte-range requests. Proxy Coverr previews through
+// the API so the panel never depends on CDN CORS policy or the browser's direct
+// route to the provider. The host allow-list prevents this endpoint being used as
+// a generic server-side request proxy.
+app.get<{ Querystring: { url?: string } }>('/api/media/preview', async (request, reply) => {
+  const target = request.query.url;
+  let parsed: URL;
+  try { parsed = new URL(target ?? ''); }
+  catch { return reply.code(400).send({ error: 'Некорректный URL предпросмотра' }); }
+  if (parsed.protocol !== 'https:' || parsed.hostname !== 'cdn.coverr.co') {
+    return reply.code(400).send({ error: 'Предпросмотр разрешён только для CDN Coverr' });
+  }
+  try {
+    const range = request.headers.range;
+    const upstream = await fetch(parsed, {
+      headers: range ? { range } : {},
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!upstream.ok || !upstream.body) return reply.code(upstream.status).send({ error: 'Видео временно недоступно у источника' });
+    for (const name of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+      const value = upstream.headers.get(name);
+      if (value) reply.header(name, value);
+    }
+    return reply.code(upstream.status).send(Readable.fromWeb(upstream.body as never));
+  } catch {
+    return reply.code(502).send({ error: 'Не удалось получить предпросмотр от Coverr' });
+  }
+});
 
 app.post<{ Body: { url: string } }>('/api/articles/import', async (request, reply) => {
   const url = request.body?.url?.trim();

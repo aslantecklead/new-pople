@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS render_jobs (
   stage TEXT NOT NULL DEFAULT 'queued',
   status TEXT NOT NULL DEFAULT 'queued',
   output_path TEXT,
+  error_message TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

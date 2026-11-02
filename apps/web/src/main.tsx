@@ -205,7 +205,7 @@ function App() {
           setSourceCredits((detail.assets ?? []).filter((asset: SourceCredit) => asset.source_provider && asset.source_url));
         });
       }
-      if (current.status === 'failed') { window.clearInterval(poll); setRenderError('Рендер не удался. Сервер сохранил подробности в логах worker.'); }
+      if (current.status === 'failed') { window.clearInterval(poll); setRenderError(current.error_message ? `Рендер не удался: ${current.error_message}` : 'Рендер не удался. Откройте журнал worker на сервере.'); }
     }, 1500);
     void refreshProjects();
     } catch (error) { setRenderError(error instanceof Error ? error.message : 'Не удалось скачать кадры или запустить монтаж'); }
@@ -269,7 +269,7 @@ function App() {
       <div className="media-toolbar"><div className="tabs">{(['video','photo'] as const).map(kind=><button type="button" key={kind} className={mediaTab===kind?'active':''} onClick={()=>{setMediaTab(kind);setDisplayPage(1);}}>{kind==='video'?'Видео':'Фото'} ({remoteMedia.filter(m=>m.kind===kind).length})</button>)}</div>
       <select aria-label="Фильтр по теме" value={topicFilter} onChange={e=>{setTopicFilter(e.target.value);setDisplayPage(1);}}><option value="">Все темы</option>{keywords.map((k,i)=><option key={i} value={k.query}>{k.label}</option>)}</select></div>
       {warnings.length>0&&<details className="search-warnings"><summary>Некоторые источники не ответили ({warnings.length})</summary>{warnings.map((w,i)=><p key={i}>{w}</p>)}</details>}
-      {!filteredMedia.length&&<p className="empty">По этой теме видео нет. Переключитесь на «Фото» или вернитесь к тексту и измените русскую либо английскую пару запроса.</p>}
+      {!filteredMedia.length&&<p className="empty">По этой теме {mediaTab==='video'?'видео':'фото'} пока нет. Измените русский или английский запрос либо добавьте свою тему.</p>}
       <div className="remote-grid">{visibleMedia.map(item=><article className={`asset media-card ${selectedRemoteIds.includes(item.id)?'selected':''}`} key={item.id}>
         <div className="media-preview">{item.kind==='photo'?<img loading="lazy" src={item.previewUrl} alt={item.title}/>:<video controls muted preload="none" src={item.previewUrl}/>}
         <label className="pick"><input type="checkbox" aria-label={`Выбрать ${item.title}`} checked={selectedRemoteIds.includes(item.id)} onChange={()=>setSelectedRemoteIds(ids=>ids.includes(item.id)?ids.filter(id=>id!==item.id):ids.length<8?[...ids,item.id]:ids)}/> Выбрать</label></div>

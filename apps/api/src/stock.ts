@@ -56,7 +56,7 @@ function decodeHtml(html: string) {
   return html.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/\\u002F/gi, '/');
 }
 
-async function searchYandex(query: string, page: number): Promise<StockAsset[]> {
+async function searchYandex(query: string, page: number, tag = query): Promise<StockAsset[]> {
   const url = `https://yandex.ru/images/search?text=${encodeURIComponent(query)}&p=${page - 1}`;
   const response = await fetch(url, {headers: {'user-agent':'Mozilla/5.0'}, signal:AbortSignal.timeout(18000)});
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -69,7 +69,7 @@ async function searchYandex(query: string, page: number): Promise<StockAsset[]> 
       const snippet = JSON.parse(match[2]);
       if (!/^https?:\/\//.test(downloadUrl) || !snippet.url || !snippet.title) continue;
       items.push({downloadUrl, extension:'.jpg', mimeType:'image/jpeg', originalName:snippet.title,
-        sourceProvider:'yandex-images', sourceUrl:snippet.url, tags:[query], sourceLicense:'Источник: проверьте условия использования'});
+        sourceProvider:'yandex-images', sourceUrl:snippet.url, tags:[tag], sourceLicense:'Источник: проверьте условия использования'});
     } catch { /* Ignore malformed result records. */ }
   }
   if (!items.length && /captcha|showcaptcha|SmartCaptcha/i.test(html)) throw new Error('Источник запросил проверку CAPTCHA');
@@ -117,7 +117,13 @@ export async function searchRemoteMedia(text: string, keywords?: Keyword[], page
   for (let i=0;i<queries.length;i+=2) {
     const batch = await Promise.all(queries.slice(i,i+2).map(async k => {
       // Russian label is sent to Russian image search; English translation is sent to Coverr.
-      const results = await Promise.allSettled([searchCoverr({query:k.query,kind:'video'},page),searchYandex(k.label,page)]);
+      const results = await Promise.allSettled([
+        searchCoverr({query:k.query,kind:'video'},page),
+        // Search Yandex in Russian, but keep the English query as the stable UI tag.
+        // The UI filters and paginates by that tag, so a result must not disappear
+        // merely because its source uses a Russian phrase.
+        searchYandex(k.label,page,k.query),
+      ]);
       return results.flatMap((r,index) => {
         if (r.status === 'fulfilled') return r.value;
         warnings.push(`${index ? 'Яндекс' : 'Coverr'} · ${k.label}: ${r.reason instanceof Error ? r.reason.message : 'нет ответа'}`);
@@ -136,8 +142,11 @@ export async function searchRemoteMedia(text: string, keywords?: Keyword[], page
   }
   const items = [...unique.values()].map(asset => {
     const id = randomUUID(); selections.set(id,asset);
+    const previewUrl = asset.sourceProvider === 'coverr'
+      ? `/api/media/preview?url=${encodeURIComponent(asset.previewUrl ?? asset.downloadUrl)}`
+      : asset.previewUrl ?? asset.downloadUrl;
     return {id, kind:asset.mimeType.startsWith('image/')?'photo' as const:'video' as const,
-      title:asset.originalName, previewUrl:asset.previewUrl ?? asset.downloadUrl, provider:asset.sourceProvider, sourceUrl:asset.sourceUrl,
+      title:asset.originalName, previewUrl, provider:asset.sourceProvider, sourceUrl:asset.sourceUrl,
       author:asset.sourceAuthor, license:asset.sourceLicense, query:asset.tags[0]};
   });
   const result = {items, warnings, hasMore:groups.some(g=>g.length>=12), expiresAt:Date.now()+3600000};

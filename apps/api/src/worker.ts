@@ -108,7 +108,9 @@ new Worker(
         [`outputs/${jobId}.mp4`, jobId],
       );
     } catch (error) {
-      await db.query("UPDATE render_jobs SET status = 'failed', updated_at = now() WHERE id = $1", [jobId]);
+      const message = error instanceof Error ? error.message : 'Неизвестная ошибка рендера';
+      console.error('Render failed', { jobId, message, stack: error instanceof Error ? error.stack : undefined });
+      await db.query("UPDATE render_jobs SET status = 'failed', stage = 'failed', error_message = $1, updated_at = now() WHERE id = $2", [message.slice(0, 1400), jobId]);
       throw error;
     }
   },
