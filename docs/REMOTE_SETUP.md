@@ -29,6 +29,24 @@ Invoke-RestMethod http://127.0.0.1:8080/health
 `/health` должен вернуть JSON с `"ok": true`. Проекты и медиа находятся в
 именованных Docker volumes, поэтому переживают пересборку контейнеров.
 
+Первая загрузка `qwen2.5:3b` занимает около 1,9 ГБ. Её можно запустить в фоне,
+чтобы не держать SSH-окно открытым:
+
+```powershell
+Start-Process docker -ArgumentList @(
+  'compose', '-f', 'docker-compose.server.yml', 'exec', '-T',
+  'ollama', 'ollama', 'pull', 'qwen2.5:3b'
+) -WorkingDirectory (Get-Location) `
+  -RedirectStandardOutput .\ollama-pull.log `
+  -RedirectStandardError .\ollama-pull.err
+
+Get-Content .\ollama-pull.log -Wait
+docker compose -f docker-compose.server.yml exec -T ollama ollama list
+```
+
+Модель готова, когда `ollama list` показывает `qwen2.5:3b`. После этого
+`POST /api/keywords` использует её для выделения поисковых тем.
+
 ## Подключение нового Mac или рабочего компьютера
 
 1. Войдите в Tailscale под тем же аккаунтом и убедитесь, что виден Windows-сервер.
@@ -110,3 +128,10 @@ Invoke-RestMethod http://127.0.0.1:8080/health
 ```
 
 Не публикуйте порт `8080` в интернет и не коммитьте `.env` или SSH-ключи.
+
+## Текущее развёртывание
+
+Windows-сервер использует каталог `C:\Users\aleck\news-video-factory`, ветку
+`main` и Docker Compose. Обновление выполняется командами из раздела выше;
+данные PostgreSQL, Redis, медиафайлы и модели Ollama лежат в Docker volumes и
+не удаляются при `git pull` или пересборке `api` и `worker`.
