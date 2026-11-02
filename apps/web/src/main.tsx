@@ -271,8 +271,13 @@ function App() {
       {warnings.length>0&&<details className="search-warnings"><summary>Некоторые источники не ответили ({warnings.length})</summary>{warnings.map((w,i)=><p key={i}>{w}</p>)}</details>}
       {!filteredMedia.length&&<p className="empty">По этой теме {mediaTab==='video'?'видео':'фото'} пока нет. Измените русский или английский запрос либо добавьте свою тему.</p>}
       <div className="remote-grid">{visibleMedia.map(item=><article className={`asset media-card ${selectedRemoteIds.includes(item.id)?'selected':''}`} key={item.id}>
-        <div className="media-preview">{item.kind==='photo'?<img loading="lazy" src={item.previewUrl} alt={item.title}/>:<video controls muted preload="none" src={item.previewUrl}/>}
-        <label className="pick"><input type="checkbox" aria-label={`Выбрать ${item.title}`} checked={selectedRemoteIds.includes(item.id)} onChange={()=>setSelectedRemoteIds(ids=>ids.includes(item.id)?ids.filter(id=>id!==item.id):ids.length<8?[...ids,item.id]:ids)}/> Выбрать</label></div>
+        <div className="media-preview">
+          {item.kind==='photo'
+            ? <img loading="lazy" src={item.previewUrl} alt={item.title}/>
+            : <video controls muted preload="none" src={item.previewUrl.startsWith('/') ? `${API_URL}${item.previewUrl}` : item.previewUrl}/>
+          }
+        </div>
+        <label className="pick"><input type="checkbox" aria-label={`Выбрать ${item.title}`} checked={selectedRemoteIds.includes(item.id)} onChange={()=>setSelectedRemoteIds(ids=>ids.includes(item.id)?ids.filter(id=>id!==item.id):ids.length<8?[...ids,item.id]:ids)}/> Выбрать</label>
         <span className="media-title" title={item.title}>{item.title}</span><small className="query-label">{item.query}</small>
         <a className="source-badge" href={item.sourceUrl} target="_blank" rel="noreferrer"><span aria-hidden="true">{sources[item.provider]?.icon??'↗'}</span>{sources[item.provider]?.name??item.provider} ↗</a>
       </article>)}</div>

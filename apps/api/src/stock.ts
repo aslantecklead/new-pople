@@ -40,11 +40,11 @@ async function searchCoverr(scene: Scene, page = 1): Promise<StockAsset[]> {
       const tokens: string[] = query.toLowerCase().match(/[a-z]{3,}/g)?.filter(t => !['the','and','with','for','from'].includes(t)) ?? [];
       const description = `${item.title ?? ''} ${item.description ?? ''} ${JSON.stringify(item.tags ?? [])}`.toLowerCase();
       const words: string[] = description.match(/[a-z]+/g) ?? [];
-      const forbidden: string[] = ['pregnant', 'pregnancy', 'newborn', 'baby', 'nursery', 'maternity'];
-      // A generic tag such as "toys" must not quietly turn into pregnancy or baby-room footage.
-      if (forbidden.some(word => words.includes(word)) && !tokens.some(token => forbidden.includes(token))) return [];
       const matches = tokens.filter(token => words.some(word => word === token || word.replace(/s$/, '') === token.replace(/s$/, '') || (token.length > 5 && word.startsWith(token.replace(/ing$/, ''))))).length;
-      if (!tokens.length || matches < (tokens.length > 2 ? 2 : 1)) return [];
+      // Relevance is governed by the current AI-generated query only. For a
+      // multi-word request, require at least two terms instead of accepting a
+      // single accidental match such as “toy” in an unrelated baby-room clip.
+      if (!tokens.length || matches < Math.min(tokens.length, 2)) return [];
       const url = item.urls?.mp4_download ?? item.urls?.mp4 ?? item.mp4_download;
       return url ? [{ downloadUrl: url, previewUrl: item.urls?.mp4_preview ?? url, extension: '.mp4', mimeType: 'video/mp4', originalName: item.title ? `${item.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')}.mp4` : `coverr-${item.id ?? randomUUID()}.mp4`, sourceProvider: 'coverr' as const, sourceUrl: `https://coverr.co/videos/${item.slug ?? item.id ?? ''}`, sourceLicense: 'Coverr License', tags: [scene.query] }] : [];
     });
