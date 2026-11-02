@@ -5,7 +5,7 @@ RUN apt-get update \
 RUN python3 -m venv /opt/tts \
   && /opt/tts/bin/pip install --no-cache-dir piper-tts==1.8.0
 RUN mkdir -p /opt/voices && cd /opt/voices \
-  && /opt/tts/bin/python -m piper.download_voices ru_RU-irina-medium
+  && /opt/tts/bin/python -m piper.download_voices ru_RU-irina-medium ru_RU-dmitri-medium ru_RU-denis-medium
 WORKDIR /app
 COPY package.json ./
 COPY apps/api/package.json ./apps/api/package.json

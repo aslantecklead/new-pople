@@ -1,5 +1,6 @@
 export type EditingAsset = { id:string; object_key:string; mime_type:string; original_name:string; tags:string[] };
 export type Scene = { text:string; assetId:string|null };
+export type CaptionStyle = { font?:string; size?:number; color?:string };
 
 // Text is split deterministically so the model can only choose footage. It
 // cannot rewrite quotations, omit words, or invent narration.
@@ -53,12 +54,33 @@ PHRASES: ${JSON.stringify(batch.map((text,i)=>({index:i,text})))}`})
   return scenes;
 }
 
-export function sceneCaptions(text:string,duration:number) {
+export function planOrderedTimeline(text:string,assets:EditingAsset[]):Scene[] {
+  const phrases=splitNarration(text);
+  if(!phrases.length) throw new Error('Текст для озвучки пуст');
+  if(!assets.length) return phrases.map(text=>({text,assetId:null}));
+  if(assets.length<=phrases.length) return phrases.map((text,index)=>({
+    text,assetId:assets[Math.min(assets.length-1,Math.floor(index*assets.length/phrases.length))].id,
+  }));
+  const words=text.trim().split(/\s+/);
+  const sceneCount=Math.min(assets.length,words.length);
+  const scenes:Scene[]=[];
+  for(let index=0;index<sceneCount;index++) {
+    const start=Math.floor(index*words.length/sceneCount);
+    const end=Math.floor((index+1)*words.length/sceneCount);
+    scenes.push({text:words.slice(start,end).join(' '),assetId:assets[index].id});
+  }
+  return scenes;
+}
+
+export function sceneCaptions(text:string,duration:number,style:CaptionStyle={}) {
   const clean=text.replace(/[{}\\]/g,'').replace(/\s+/g,' ');
   const words=clean.split(' ');
   const middle=Math.ceil(words.length/2);
   const caption=clean.length>40 ? `${words.slice(0,middle).join(' ')}\\N${words.slice(middle).join(' ')}` : clean;
   const time=`${Math.floor(duration/3600)}:${String(Math.floor(duration/60)%60).padStart(2,'0')}:${(duration%60).toFixed(2).padStart(5,'0')}`;
+  const font=(style.font??'DejaVu Sans').replace(/[,\r\n]/g,'');
+  const size=Math.max(36,Math.min(84,Math.round(style.size??58)));
+  const color=/^&H[0-9A-F]{8}$/i.test(style.color??'')?style.color:'&H00FFD68A';
   return `[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -66,7 +88,7 @@ PlayResY: 1920
 WrapStyle: 0
 [V4+ Styles]
 Format: Name,Fontname,Fontsize,PrimaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding
-Style: Default,DejaVu Sans,54,&H00FFD68A,&H00201A14,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,100,150,300,1
+Style: Default,${font},${size},${color},&H00201A14,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,100,150,300,1
 [Events]
 Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
 Dialogue: 0,0:00:00.00,${time},Default,,0,0,0,,{\\fad(100,100)\\fscx97\\fscy97\\t(0,140,\\fscx100\\fscy100)}${caption}

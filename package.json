@@ -5,6 +5,8 @@
   "scripts": {
     "dev:web": "npm run dev --workspace=@factory/web",
     "dev:api": "npm run dev --workspace=@factory/api",
+    "bot": "npm run bot --workspace=@factory/api",
+    "test": "npm run test --workspaces --if-present",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present"
   }

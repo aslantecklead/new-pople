@@ -4,12 +4,17 @@ import math
 import os
 import sys
 import wave
+import re
 from pathlib import Path
 from piper import PiperVoice, SynthesisConfig
 
 plan_path = Path(sys.argv[1])
 scenes = json.loads(plan_path.read_text())
-voice = PiperVoice.load(os.environ.get("PIPER_MODEL", "/opt/voices/ru_RU-irina-medium.onnx"))
+voice_id = sys.argv[2] if len(sys.argv) > 2 else "irina"
+if not re.fullmatch(r"(irina|dmitri|denis)", voice_id):
+    voice_id = "irina"
+model_path = os.environ.get("PIPER_MODEL", f"/opt/voices/ru_RU-{voice_id}-medium.onnx")
+voice = PiperVoice.load(model_path)
 sample_rate = voice.config.sample_rate
 output = plan_path.parent / "narration.wav"
 with wave.open(str(output), "wb") as wav:
@@ -29,4 +34,4 @@ with wave.open(str(output), "wb") as wav:
         scene["duration"] = frames / 30
         scene["frames"] = frames
 plan_path.write_text(json.dumps(scenes, ensure_ascii=False, indent=2))
-print(json.dumps({"voice": "ru_RU-irina-medium", "scenes": len(scenes), "output": str(output)}))
+print(json.dumps({"voice": f"ru_RU-{voice_id}-medium", "scenes": len(scenes), "output": str(output)}))

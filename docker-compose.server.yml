@@ -6,6 +6,21 @@ services:
       OLLAMA_NUM_PARALLEL: 1
     volumes:
       - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    restart: "no"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    command: ["pull", "${OLLAMA_MODEL:-qwen3.5:4b}"]
+    depends_on:
+      ollama:
+        condition: service_healthy
 
   postgres:
     image: pgvector/pgvector:pg17
@@ -35,13 +50,13 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
-    env_file: .env
+    env_file: ${APP_ENV_FILE:-.env}
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379
       MEDIA_ROOT: /data/media
       OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: qwen2.5:3b
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
     depends_on:
       postgres:
         condition: service_healthy
@@ -52,24 +67,49 @@ services:
     volumes:
       - media-data:/data/media
 
+  bot:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    command: ["npm", "run", "bot"]
+    env_file: ${APP_ENV_FILE:-.env}
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+      MEDIA_ROOT: /data/media
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      ollama-pull:
+        condition: service_completed_successfully
+    volumes:
+      - media-data:/data/media
+
   worker:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
     command: ["npm", "run", "worker"]
-    env_file: .env
+    env_file: ${APP_ENV_FILE:-.env}
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379
       MEDIA_ROOT: /data/media
       OLLAMA_BASE_URL: http://ollama:11434
-      OLLAMA_MODEL: qwen2.5:3b
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_started
+      ollama-pull:
+        condition: service_completed_successfully
     volumes:
       - media-data:/data/media
 
