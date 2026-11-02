@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
@@ -6,12 +6,23 @@ import './styles.css';
 // browser always talks to the same origin as the panel.
 const API_URL = import.meta.env.VITE_API_URL ?? '';
 
-type Keyword = {label:string; query:string};
+type Keyword = {label:string; query:string; alternatives?:string[]};
 const sources: Record<string, {name:string; icon:string}> = {'coverr':{name:'Coverr',icon:'▶'}, 'yandex-images':{name:'Яндекс',icon:'Я'}, 'google-images':{name:'Google',icon:'G'}};
 type Project = { id: string; news_text: string; created_at: string };
 type LibraryAsset = { id: string; original_name: string; mime_type: string; tags: string[]; url: string };
 type SourceCredit = { source_provider: string; source_url: string; source_author?: string; source_license?: string };
-type RemoteMedia = { id: string; kind: 'video' | 'photo'; title: string; previewUrl: string; provider: string; sourceUrl: string; author?: string; license?: string; query: string };
+type RemoteMedia = { id: string; kind: 'video' | 'photo'; title: string; previewUrl: string; posterUrl?: string; provider: string; sourceUrl: string; author?: string; license?: string; query: string; queries?: string[] };
+
+function MediaPreview({item}:{item:RemoteMedia}) {
+  const [error,setError] = useState(false);
+  const url = (path:string) => path.startsWith('/') ? `${API_URL}${path}` : path;
+  return <>
+    {item.kind==='photo'
+      ? <img loading="lazy" src={url(item.previewUrl)} alt={item.title} onError={()=>setError(true)}/>
+      : <video controls muted playsInline preload="metadata" poster={item.posterUrl ? url(item.posterUrl) : undefined} src={url(item.previewUrl)} onError={()=>setError(true)}/>}
+    {error && <small className="inline-error">Не удалось загрузить превью. <a href={item.sourceUrl} target="_blank" rel="noreferrer">Открыть источник</a></small>}
+  </>;
+}
 
 function App() {
   const [newsText, setNewsText] = useState('');
@@ -44,26 +55,28 @@ function App() {
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [topicFilter, setTopicFilter] = useState('');
-  const [analysisAttempt, setAnalysisAttempt] = useState(0);
+  const analysisRef = useRef<AbortController | undefined>(undefined);
+  const [analyzedText, setAnalyzedText] = useState('');
   const [workflow, setWorkflow] = useState<'edit'|'select'|'render'>('edit');
   const [renderError, setRenderError] = useState('');
 
-  useEffect(() => {
+  async function analyzeText() {
+    analysisRef.current?.abort();
     const abort = new AbortController();
-    setKeywords([]); setKeywordError(''); setKeywordMode('');
-    if (newsText.trim().length < 20) {setAnalyzing(false); return;}
+    analysisRef.current = abort;
+    const submittedText = newsText;
+    setKeywordError(''); setKeywordMode('');
+    if (newsText.trim().length < 20) {setKeywordError('Введите не менее 20 символов'); return;}
     setAnalyzing(true);
-    const timer = window.setTimeout(async () => {
       try {
         const response = await fetch(`${API_URL}/api/keywords`, {method:'POST', headers:{'content-type':'application/json'},body:JSON.stringify({newsText}),signal:abort.signal});
         const data = await response.json();
         if (!response.ok) throw new Error(data.error ?? 'Не удалось разобрать текст');
-        if (!abort.signal.aborted) {setKeywords(data.keywords);setKeywordMode('Темы выделены локальной нейросетью');}
+        if (!abort.signal.aborted) {setKeywords(data.keywords);setAnalyzedText(submittedText);setKeywordMode('Темы выделены локальной нейросетью');}
       } catch(error) {if (!abort.signal.aborted) setKeywordError(error instanceof Error?error.message:'Ошибка анализа');}
       finally {if (!abort.signal.aborted) setAnalyzing(false);}
-    }, 900);
-    return () => {abort.abort();window.clearTimeout(timer);};
-  }, [newsText, analysisAttempt]);
+  }
+  useEffect(() => () => analysisRef.current?.abort(), []);
 
   async function fetchMedia(page:number, append=false) {
     const response = await fetch(`${API_URL}/api/media/search`, {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({newsText,keywords:keywords.filter(k=>k.query.trim()),page}),signal:AbortSignal.timeout(150000)});
@@ -72,7 +85,9 @@ function App() {
     setRemoteMedia(previous => {
       const unique = new Map<string,RemoteMedia>();
       for (const item of [...(append ? previous ?? []:[]),...data.items] as RemoteMedia[]) {
-        const key=item.previewUrl.split('?')[0].replace('/small_2x/','/small/');
+        // Proxy URLs share their pathname. Removing their query collapsed every
+        // video into the same card. Deduplicate by the actual source instead.
+        const key=`${item.provider}:${item.sourceUrl}`;
         if (!unique.has(key)) unique.set(key,item);
       }
       return [...unique.values()];
@@ -106,9 +121,8 @@ function App() {
     setStatus('Проверяю связь с сервером…');
     try {
       const response = await fetch(`${API_URL}/health`, { signal: AbortSignal.timeout(8_000) });
-      const health = await response.json() as { stockSearch?: { wikimediaCommons?: boolean; pexels?: boolean } };
-      const stockReady = health.stockSearch?.wikimediaCommons || health.stockSearch?.pexels;
-      setStatus(response.ok ? (stockReady ? 'Сервер подключён · автопоиск медиа включён' : 'Сервер подключён · включи Wikimedia Commons или добавь PEXELS_API_KEY') : 'Сервер недоступен');
+      await response.json();
+      setStatus(response.ok ? 'Сервер подключён' : 'Сервер недоступен');
       if (!response.ok) setConnectionError(`Сервер вернул HTTP ${response.status}.`);
       if (response.ok) { void refreshProjects(); void searchLibrary(''); }
     } catch (error) {
@@ -185,18 +199,21 @@ function App() {
     if (!activeProjectId) return;
     try {
     setRenderError('');
+    setOutputUrl(undefined);
+    setWorkflow('render');
     setStatus('Скачиваю выбранные кадры на сервер…');
     const imported = await fetch(`${API_URL}/api/projects/${activeProjectId}/assets/import`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mediaIds: selectedRemoteIds }), signal: AbortSignal.timeout(120_000) }).then((r) => r.json());
     if (imported.error) { setRenderError(`${imported.error}${imported.failed?.length ? ` ${imported.failed.join('; ')}` : ''}`); return; }
     if (imported.failed?.length) setStatus(`Скачано ${imported.imported}; часть источников недоступна, продолжаю сборку…`);
     setRemoteMedia(undefined);
     setWorkflow('render');
-    const job = await fetch(`${API_URL}/api/projects/${activeProjectId}/render`, { method: 'POST', signal: AbortSignal.timeout(20_000) }).then((r) => r.json());
+    const job = await fetch(`${API_URL}/api/projects/${activeProjectId}/render`, { method: 'POST', headers:{'content-type':'application/json'},body:JSON.stringify({assetIds:imported.assetIds}),signal: AbortSignal.timeout(20_000) }).then((r) => r.json());
     if (job.error) return setStatus(job.error);
     setStatus('Ролик собирается: раскадровка…');
     const poll = window.setInterval(async () => {
       const current = await fetch(`${API_URL}/api/jobs/${job.id}`).then((r) => r.json());
-      setStatus(`Стадия: ${current.stage}`);
+      const stages:Record<string,string>={queued:'В очереди',storyboard:'ИИ подбирает кадры к фразам',voiceover:'Создаю нейронную озвучку',export:'Экспортирую MP4',failed:'Ошибка сборки',completed:'Видео готово'};
+      setStatus(current.stage?.startsWith('render:') ? `Монтаж сцены ${current.stage.slice(7)}` : stages[current.stage] ?? current.stage);
       if (current.status === 'completed') {
         window.clearInterval(poll);
         setOutputUrl(`${API_URL}/media/${current.output_path}`);
@@ -232,7 +249,7 @@ function App() {
     setStatus(`Открыт проект от ${new Date(project.created_at).toLocaleString('ru-RU')}`);
   }
 
-  const filteredMedia=(remoteMedia??[]).filter(item=>item.kind===mediaTab && (!topicFilter||item.query===topicFilter));
+  const filteredMedia=(remoteMedia??[]).filter(item=>item.kind===mediaTab && (!topicFilter||(item.queries??[item.query]).includes(topicFilter)));
   const totalPages=Math.max(1,Math.ceil(filteredMedia.length/12));
   const visibleMedia=filteredMedia.slice((displayPage-1)*12,displayPage*12);
   return <main>
@@ -243,14 +260,16 @@ function App() {
     <form onSubmit={startRender}>
       <div className="article-import"><input value={articleUrl} onChange={(e) => setArticleUrl(e.target.value)} placeholder="Ссылка на статью newpeople.ru/news/..." /><button type="button" onClick={() => void importArticle()}>Загрузить статью</button></div>
       <label htmlFor="news">Текст новости</label>
-      <textarea id="news" value={newsText} onChange={(e) => setNewsText(e.target.value)} placeholder="Вставь текст новости. На сервере он станет раскадровкой и голосом." required />
+      <textarea id="news" value={newsText} onChange={(e) => {analysisRef.current?.abort();setAnalyzing(false);setNewsText(e.target.value);}} placeholder="Вставь текст новости. На сервере он станет раскадровкой и голосом." required />
+      <button type="button" className="primary" disabled={analyzing || newsText.trim().length<20} onClick={()=>void analyzeText()}>{analyzing?'Анализирую текст…':'Выделить ключевые слова'}</button>
+      {analyzedText && analyzedText!==newsText && <p className="inline-error">Текст изменён. Повторите анализ перед поиском.</p>}
       <section className="keyword-panel">
         <div className="section-title"><b>Темы для поиска</b><small>{analyzing?'Нейросеть анализирует текст…':keywordMode}</small></div>
         <p>Русская тема и английский запрос. Нажмите на текст, чтобы изменить его.</p>
-        {keywordError && <div className="keyword-error" role="alert"><p>{keywordError}</p><button type="button" className="quiet" onClick={()=>setAnalysisAttempt(value=>value+1)}>Повторить анализ</button></div>}
+        {keywordError && <div className="keyword-error" role="alert"><p>{keywordError}</p><button type="button" className="quiet" onClick={()=>void analyzeText()}>Повторить анализ</button></div>}
         <div className="keyword-grid">{keywords.map((k,i)=><div className="keyword-chip" key={i}>
-          <input aria-label={`Тема ${i+1}`} value={k.label} onChange={e=>setKeywords(old=>old.map((v,j)=>j===i?{...v,label:e.target.value}:v))}/>
-          <input aria-label={`Запрос ${i+1}`} value={k.query} placeholder="English search query" onChange={e=>setKeywords(old=>old.map((v,j)=>j===i?{...v,query:e.target.value}:v))}/>
+          <input aria-label={`Тема ${i+1}`} value={k.label} onChange={e=>setKeywords(old=>old.map((v,j)=>j===i?{...v,label:e.target.value,alternatives:[]}:v))}/>
+          <input aria-label={`Запрос ${i+1}`} value={k.query} placeholder="English search query" onChange={e=>setKeywords(old=>old.map((v,j)=>j===i?{...v,query:e.target.value,alternatives:[]}:v))}/>
           <button type="button" aria-label={`Удалить тему ${i+1}`} onClick={()=>setKeywords(old=>old.filter((_,j)=>j!==i))}>×</button>
         </div>)}</div>
         <button type="button" className="quiet" disabled={analyzing||keywords.length>=12} onClick={()=>setKeywords(old=>[...old,{label:'Своя тема',query:''}])}>＋ Добавить тему</button>
@@ -272,10 +291,7 @@ function App() {
       {!filteredMedia.length&&<p className="empty">По этой теме {mediaTab==='video'?'видео':'фото'} пока нет. Измените русский или английский запрос либо добавьте свою тему.</p>}
       <div className="remote-grid">{visibleMedia.map(item=><article className={`asset media-card ${selectedRemoteIds.includes(item.id)?'selected':''}`} key={item.id}>
         <div className="media-preview">
-          {item.kind==='photo'
-            ? <img loading="lazy" src={item.previewUrl} alt={item.title}/>
-            : <video controls muted preload="none" src={item.previewUrl.startsWith('/') ? `${API_URL}${item.previewUrl}` : item.previewUrl}/>
-          }
+          <MediaPreview item={item}/>
         </div>
         <label className="pick"><input type="checkbox" aria-label={`Выбрать ${item.title}`} checked={selectedRemoteIds.includes(item.id)} onChange={()=>setSelectedRemoteIds(ids=>ids.includes(item.id)?ids.filter(id=>id!==item.id):ids.length<8?[...ids,item.id]:ids)}/> Выбрать</label>
         <span className="media-title" title={item.title}>{item.title}</span><small className="query-label">{item.query}</small>

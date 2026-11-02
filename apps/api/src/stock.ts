@@ -1,7 +1,9 @@
 import { extractKeywords, type Keyword } from './keywords.js';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createWriteStream } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, stat, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -21,7 +23,7 @@ type StockAsset = {
 };
 
 type Scene = { query: string; kind: 'video' | 'photo' };
-export type RemoteMedia = { id: string; kind: 'video' | 'photo'; title: string; previewUrl: string; provider: string; sourceUrl: string; author?: string; license?: string; query: string };
+export type RemoteMedia = { id: string; kind: 'video' | 'photo'; title: string; previewUrl: string; posterUrl?: string; provider: string; sourceUrl: string; author?: string; license?: string; query: string; queries?: string[] };
 export async function createStoryboard(text: string): Promise<Scene[]> {
   return (await extractKeywords(text)).keywords.map(k => ({query: k.query, kind: 'video'}));
 }
@@ -32,7 +34,7 @@ async function searchCoverr(scene: Scene, page = 1): Promise<StockAsset[]> {
   const search = async (query: string) => {
     // Some searches have no vertical result at Coverr. Crop happens in the renderer,
     // so returning a relevant landscape clip is preferable to returning no video.
-    const params = new URLSearchParams({ query, page_size: '12', page: String(page - 1), urls: 'true', sort: 'trending' });
+    const params = new URLSearchParams({ query, page_size: '36', page: String(page - 1), urls: 'true' });
     const response = await fetch(`https://api.coverr.co/videos?${params}`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(20_000) });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json() as { hits?: Array<{ id?: string; slug?: string; title?: string; description?: string; tags?: unknown; urls?: { mp4_download?: string; mp4_preview?: string; mp4?: string }; mp4_download?: string }> };
@@ -86,7 +88,7 @@ export async function downloadSelectedStock(asset: StockAsset, projectId: string
   await pipeline(Readable.fromWeb(response.body as never), createWriteStream(fullPath));
   await db.query(`INSERT INTO assets (id, project_id, object_key, original_name, mime_type, tags, source_provider, source_url, source_author, source_license)
     VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10)`, [id, projectId, objectKey, asset.originalName, asset.mimeType, JSON.stringify(asset.tags), asset.sourceProvider, asset.sourceUrl, asset.sourceAuthor ?? null, asset.sourceLicense ?? null]);
-  return { object_key: objectKey, mime_type: asset.mimeType };
+  return { id, object_key: objectKey, mime_type: asset.mimeType };
 }
 
 export async function downloadAutomaticStock(text: string, projectId: string, mediaRoot: string, db: Pool) {
@@ -118,7 +120,8 @@ export async function searchRemoteMedia(text: string, keywords?: Keyword[], page
     const batch = await Promise.all(queries.slice(i,i+2).map(async k => {
       // Russian label is sent to Russian image search; English translation is sent to Coverr.
       const results = await Promise.allSettled([
-        searchCoverr({query:k.query,kind:'video'},page),
+        Promise.all([k.query,...(Array.isArray(k.alternatives)?k.alternatives.filter(s=>typeof s==='string' && s.length<=80).slice(0,2):[])].map(query=>searchCoverr({query,kind:'video'},page)))
+          .then(groups=>groups.flat().map(asset=>({...asset,tags:[k.query]}))),
         // Search Yandex in Russian, but keep the English query as the stable UI tag.
         // The UI filters and paginates by that tag, so a result must not disappear
         // merely because its source uses a Russian phrase.
@@ -139,15 +142,17 @@ export async function searchRemoteMedia(text: string, keywords?: Keyword[], page
     const canonical = new URL(asset.downloadUrl); canonical.search = '';
     const key = canonical.toString().replace(/\/small_2x\//, '/small/');
     if (!unique.has(key)) unique.set(key,asset);
+    else unique.get(key)!.tags = [...new Set([...unique.get(key)!.tags, ...asset.tags])];
   }
   const items = [...unique.values()].map(asset => {
-    const id = randomUUID(); selections.set(id,asset);
+    const id = createHash('sha256').update(asset.downloadUrl).digest('hex'); selections.set(id,asset);
     const previewUrl = asset.sourceProvider === 'coverr'
-      ? `/api/media/preview?url=${encodeURIComponent(asset.previewUrl ?? asset.downloadUrl)}`
+      ? `/api/media/${id}/preview`
       : asset.previewUrl ?? asset.downloadUrl;
     return {id, kind:asset.mimeType.startsWith('image/')?'photo' as const:'video' as const,
       title:asset.originalName, previewUrl, provider:asset.sourceProvider, sourceUrl:asset.sourceUrl,
-      author:asset.sourceAuthor, license:asset.sourceLicense, query:asset.tags[0]};
+      posterUrl: asset.sourceProvider === 'coverr' ? `/api/media/${id}/poster` : undefined,
+      author:asset.sourceAuthor, license:asset.sourceLicense, query:asset.tags[0], queries:asset.tags};
   });
   const result = {items, warnings, hasMore:groups.some(g=>g.length>=12), expiresAt:Date.now()+3600000};
   if (searchCache.size > 100) searchCache.clear();
@@ -156,3 +161,35 @@ export async function searchRemoteMedia(text: string, keywords?: Keyword[], page
 }
 
 export function selectedRemoteMedia(id: string) { return selections.get(id); }
+
+const previewTasks = new Map<string, Promise<string>>();
+export async function cachedVideoPreview(id: string, mediaRoot: string, poster = false): Promise<string> {
+  if (!/^[a-f0-9]{64}$/.test(id)) throw new Error('Неверный идентификатор');
+  const key = join('previews', `${id}${poster ? '.jpg' : '.mp4'}`);
+  const path = join(mediaRoot, key);
+  if (await stat(path).then(s=>s.size>0).catch(()=>false)) return key;
+  const running = previewTasks.get(key);
+  if (running) return running;
+  const task = (async () => {
+    await mkdir(join(mediaRoot,'previews'), {recursive:true});
+    const temp = `${path}.${randomUUID()}.tmp`;
+    try {
+      if (poster) {
+        const video = await cachedVideoPreview(id,mediaRoot);
+        await promisify(execFile)('ffmpeg',['-v','error','-ss','0.2','-i',join(mediaRoot,video),'-frames:v','1','-vf','scale=480:-2','-f','image2','-y',temp],{timeout:30000});
+      } else {
+        const asset = selections.get(id);
+        if (!asset || asset.sourceProvider!=='coverr') throw new Error('Повторите поиск: материал устарел');
+        const url = new URL(asset.previewUrl ?? asset.downloadUrl);
+        if (url.protocol!=='https:' || url.hostname!=='cdn.coverr.co') throw new Error('Неподдерживаемый CDN');
+        const response = await fetch(url,{signal:AbortSignal.timeout(45000),redirect:'error'});
+        if (!response.ok || !response.body) throw new Error(`Источник: HTTP ${response.status}`);
+        await pipeline(Readable.fromWeb(response.body as never),createWriteStream(temp));
+      }
+      await rename(temp,path);
+      return key;
+    } finally {await rm(temp,{force:true});}
+  })();
+  previewTasks.set(key,task);
+  try {return await task;} finally {previewTasks.delete(key);}
+}

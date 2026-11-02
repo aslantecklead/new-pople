@@ -11,7 +11,7 @@ import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { Pool } from 'pg';
 import { renderQueue } from './queue.js';
-import { downloadSelectedStock, searchRemoteMedia, selectedRemoteMedia } from './stock.js';
+import { cachedVideoPreview, downloadSelectedStock, searchRemoteMedia, selectedRemoteMedia } from './stock.js';
 
 const app = Fastify({ logger: true });
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -48,12 +48,22 @@ app.get('/health', async () => ({
   ok: true,
   service: 'news-video-factory',
   stockSearch: {
-    wikimediaCommons: process.env.WIKIMEDIA_COMMONS_ENABLED !== 'false',
-    pexels: Boolean(process.env.PEXELS_API_KEY),
+    yandexImages: true,
     coverr: Boolean(process.env.COVERR_API_KEY),
     localStoryboardModel: Boolean(process.env.OLLAMA_BASE_URL && process.env.OLLAMA_MODEL),
   },
 }));
+
+for (const kind of ['preview','poster'] as const) {
+  app.get<{Params:{id:string}}>(`/api/media/:id/${kind}`, async (request,reply) => {
+    try {
+      const key = await cachedVideoPreview(request.params.id,mediaRoot,kind==='poster');
+      return reply.header('Cache-Control','public, max-age=86400').sendFile(key);
+    } catch(error) {
+      return reply.code(502).send({error:error instanceof Error ? error.message : 'Предпросмотр недоступен'});
+    }
+  });
+}
 
 // Browser video elements make byte-range requests. Proxy Coverr previews through
 // the API so the panel never depends on CDN CORS policy or the browser's direct
@@ -222,7 +232,7 @@ app.post<{ Params: { id: string }; Body: { mediaIds: string[] } }>('/api/project
     catch { failed.push(`${media.originalName}: файл недоступен у источника`); }
   }
   if (!imported.length) return reply.code(422).send({ error: 'Не удалось скачать выбранные материалы. Выберите другие карточки.', failed });
-  return reply.code(201).send({ imported: imported.length, failed });
+  return reply.code(201).send({ imported: imported.length, assetIds: imported.map(a=>a.id), failed });
 });
 
 app.get<{ Querystring: { q?: string; type?: 'photo' | 'video' } }>('/api/stock/search', async (request, reply) => {
@@ -236,12 +246,14 @@ app.get<{ Querystring: { q?: string; type?: 'photo' | 'video' } }>('/api/stock/s
   return response.json();
 });
 
-app.post<{ Params: { id: string } }>('/api/projects/:id/render', async (request, reply) => {
+app.post<{ Params: { id: string }; Body?: {assetIds?:string[]} }>('/api/projects/:id/render', async (request, reply) => {
+  const assetIds=request.body?.assetIds;
+  if(assetIds!==undefined && (!Array.isArray(assetIds)||assetIds.length>20||assetIds.some(id=>typeof id!=='string'||!/^[a-f0-9-]{36}$/i.test(id)))) return reply.code(400).send({error:'Некорректный список кадров'});
   const jobId = randomUUID();
   const exists = await db.query('SELECT 1 FROM projects WHERE id = $1', [request.params.id]);
   if (!exists.rowCount) return reply.code(404).send({ error: 'project not found' });
   await db.query('INSERT INTO render_jobs (id, project_id) VALUES ($1, $2)', [jobId, request.params.id]);
-  await renderQueue.add('assemble-video', { jobId, projectId: request.params.id }, { jobId, attempts: 2 });
+  await renderQueue.add('assemble-video', { jobId, projectId: request.params.id, assetIds }, { jobId, attempts: 1 });
   return reply.code(202).send({ id: jobId, stage: 'queued' });
 });
 
