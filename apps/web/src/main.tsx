@@ -45,6 +45,8 @@ function App() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [topicFilter, setTopicFilter] = useState('');
   const [analysisAttempt, setAnalysisAttempt] = useState(0);
+  const [workflow, setWorkflow] = useState<'edit'|'select'|'render'>('edit');
+  const [renderError, setRenderError] = useState('');
 
   useEffect(() => {
     const abort = new AbortController();
@@ -151,7 +153,8 @@ function App() {
     setStatus('Ищу материалы в открытых источниках…');
     const count = await fetchMedia(1);
     setSelectedRemoteIds([]);setDisplayPage(1);setTopicFilter('');
-    setStatus(count ? 'Материалы найдены — выберите подходящие кадры' : 'По этим запросам ничего не найдено. Уточните ключевые слова.');
+    setWorkflow('select');
+    setStatus(count ? 'Шаг 2 из 3: выберите кадры' : 'Поиск завершён: добавьте или измените тему, для которой нет результата.');
     void refreshProjects();
     } catch (error) {
       if (error instanceof Error && error.name === 'TimeoutError') {
@@ -181,10 +184,13 @@ function App() {
   async function startMontage() {
     if (!activeProjectId) return;
     try {
+    setRenderError('');
     setStatus('Скачиваю выбранные кадры на сервер…');
     const imported = await fetch(`${API_URL}/api/projects/${activeProjectId}/assets/import`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mediaIds: selectedRemoteIds }), signal: AbortSignal.timeout(120_000) }).then((r) => r.json());
-    if (imported.error) return setStatus(imported.error);
+    if (imported.error) { setRenderError(`${imported.error}${imported.failed?.length ? ` ${imported.failed.join('; ')}` : ''}`); return; }
+    if (imported.failed?.length) setStatus(`Скачано ${imported.imported}; часть источников недоступна, продолжаю сборку…`);
     setRemoteMedia(undefined);
+    setWorkflow('render');
     const job = await fetch(`${API_URL}/api/projects/${activeProjectId}/render`, { method: 'POST', signal: AbortSignal.timeout(20_000) }).then((r) => r.json());
     if (job.error) return setStatus(job.error);
     setStatus('Ролик собирается: раскадровка…');
@@ -199,10 +205,10 @@ function App() {
           setSourceCredits((detail.assets ?? []).filter((asset: SourceCredit) => asset.source_provider && asset.source_url));
         });
       }
-      if (current.status === 'failed') { window.clearInterval(poll); setStatus('Рендер не удался — проверь логи worker'); }
+      if (current.status === 'failed') { window.clearInterval(poll); setRenderError('Рендер не удался. Сервер сохранил подробности в логах worker.'); }
     }, 1500);
     void refreshProjects();
-    } catch { setStatus('Не удалось скачать кадры или запустить монтаж'); }
+    } catch (error) { setRenderError(error instanceof Error ? error.message : 'Не удалось скачать кадры или запустить монтаж'); }
   }
 
   async function uploadToLibrary(event: FormEvent) {
@@ -258,12 +264,12 @@ function App() {
       <div className="asset-grid">{library.map((asset) => <label className="asset" key={asset.id}><input type="checkbox" checked={selectedLibraryIds.includes(asset.id)} onChange={() => setSelectedLibraryIds((ids) => ids.includes(asset.id) ? ids.filter((id) => id !== asset.id) : [...ids, asset.id])} />{asset.mime_type.startsWith('image/') ? <img src={`${API_URL}${asset.url}`} /> : <video muted src={`${API_URL}${asset.url}`} />}<span>{asset.original_name}</span><small>{asset.tags?.join(', ')}</small></label>)}</div>
     </details>
     {sourceCredits.length > 0 && <section className="credits"><b>Источники кадров</b>{sourceCredits.map((credit) => <a key={credit.source_url} href={credit.source_url} target="_blank" rel="noreferrer">{credit.source_provider}: {credit.source_author || 'автор'}{credit.source_license ? ` · ${credit.source_license}` : ''}</a>)}</section>}
-    {remoteMedia && <div className="modal-backdrop"><section className="media-modal" role="dialog" aria-modal="true" aria-label="Подбор кадров">
-      <header><div><b>Подбор кадров</b><small>Выберите до 8 материалов для ролика</small></div><button type="button" onClick={()=>setRemoteMedia(undefined)}>Закрыть</button></header>
+    {remoteMedia && workflow==='select' && <div className="modal-backdrop"><section className="media-modal" role="dialog" aria-modal="true" aria-label="Подбор кадров">
+      <header><div><b>Шаг 2 из 3 · Подбор кадров</b><small>Выберите до 8 материалов для ролика</small></div><button type="button" onClick={()=>{setRemoteMedia(undefined);setWorkflow('edit')}}>К тексту</button></header>
       <div className="media-toolbar"><div className="tabs">{(['video','photo'] as const).map(kind=><button type="button" key={kind} className={mediaTab===kind?'active':''} onClick={()=>{setMediaTab(kind);setDisplayPage(1);}}>{kind==='video'?'Видео':'Фото'} ({remoteMedia.filter(m=>m.kind===kind).length})</button>)}</div>
       <select aria-label="Фильтр по теме" value={topicFilter} onChange={e=>{setTopicFilter(e.target.value);setDisplayPage(1);}}><option value="">Все темы</option>{keywords.map((k,i)=><option key={i} value={k.query}>{k.label}</option>)}</select></div>
       {warnings.length>0&&<details className="search-warnings"><summary>Некоторые источники не ответили ({warnings.length})</summary>{warnings.map((w,i)=><p key={i}>{w}</p>)}</details>}
-      {!filteredMedia.length&&<p className="empty">По этой теме материалов нет. Вернитесь к тексту и уточните поисковый запрос.</p>}
+      {!filteredMedia.length&&<p className="empty">По этой теме видео нет. Переключитесь на «Фото» или вернитесь к тексту и измените русскую либо английскую пару запроса.</p>}
       <div className="remote-grid">{visibleMedia.map(item=><article className={`asset media-card ${selectedRemoteIds.includes(item.id)?'selected':''}`} key={item.id}>
         <div className="media-preview">{item.kind==='photo'?<img loading="lazy" src={item.previewUrl} alt={item.title}/>:<video controls muted preload="none" src={item.previewUrl}/>}
         <label className="pick"><input type="checkbox" aria-label={`Выбрать ${item.title}`} checked={selectedRemoteIds.includes(item.id)} onChange={()=>setSelectedRemoteIds(ids=>ids.includes(item.id)?ids.filter(id=>id!==item.id):ids.length<8?[...ids,item.id]:ids)}/> Выбрать</label></div>
@@ -274,6 +280,7 @@ function App() {
       <button type="button" disabled={loadingMore||!hasMore} onClick={()=>void loadMore()}>{loadingMore?'Загружаю…':'Ещё из источников'}</button></div>
       <footer className="selection-bar"><span>Выбрано {selectedRemoteIds.length} / 8</span><button className="primary" type="button" onClick={()=>void startMontage()} disabled={!selectedRemoteIds.length}>Собрать ролик</button></footer>
     </section></div>}
+    {workflow==='render' && <div className="modal-backdrop"><section className="render-screen" role="status"><p>Шаг 3 из 3</p><h2>{outputUrl ? 'Видео готово' : 'Собираю ролик'}</h2><div className="render-progress" aria-hidden="true"/><p>{status}</p>{renderError&&<p className="inline-error">{renderError}</p>}{outputUrl&&<><video controls autoPlay src={outputUrl}/><a className="primary export" href={outputUrl} download>Экспортировать MP4</a></>}<button type="button" className="quiet" onClick={()=>setWorkflow('edit')}>К новому ролику</button></section></div>}
     {outputUrl && <section className="output"><b>Готовый черновик</b><video controls src={outputUrl} /> <a href={outputUrl} download>Скачать MP4</a></section>}
   </main>;
 }

@@ -183,11 +183,15 @@ app.post<{ Params: { id: string }; Body: { mediaIds: string[] } }>('/api/project
   const exists = await db.query('SELECT 1 FROM projects WHERE id = $1', [request.params.id]);
   if (!exists.rowCount) return reply.code(404).send({ error: 'project not found' });
   const imported = [];
+  const failed: string[] = [];
   for (const id of ids.slice(0, 8)) {
     const media = selectedRemoteMedia(id);
-    if (media) imported.push(await downloadSelectedStock(media, request.params.id, mediaRoot, db));
+    if (!media) { failed.push('Выбранный материал устарел. Выполните поиск снова.'); continue; }
+    try { imported.push(await downloadSelectedStock(media, request.params.id, mediaRoot, db)); }
+    catch { failed.push(`${media.originalName}: файл недоступен у источника`); }
   }
-  return reply.code(201).send({ imported: imported.length });
+  if (!imported.length) return reply.code(422).send({ error: 'Не удалось скачать выбранные материалы. Выберите другие карточки.', failed });
+  return reply.code(201).send({ imported: imported.length, failed });
 });
 
 app.get<{ Querystring: { q?: string; type?: 'photo' | 'video' } }>('/api/stock/search', async (request, reply) => {

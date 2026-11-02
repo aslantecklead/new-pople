@@ -9,6 +9,7 @@ import { Pool } from 'pg';
 
 type StockAsset = {
   downloadUrl: string;
+  previewUrl?: string;
   extension: string;
   mimeType: string;
   originalName: string;
@@ -36,13 +37,16 @@ async function searchCoverr(scene: Scene, page = 1): Promise<StockAsset[]> {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json() as { hits?: Array<{ id?: string; slug?: string; title?: string; description?: string; tags?: unknown; urls?: { mp4_download?: string; mp4_preview?: string; mp4?: string }; mp4_download?: string }> };
     return (data.hits ?? []).flatMap((item) => {
-      const tokens = query.toLowerCase().match(/[a-z]{3,}/g)?.filter(t => !['the','and','with','for','from'].includes(t)) ?? [];
+      const tokens: string[] = query.toLowerCase().match(/[a-z]{3,}/g)?.filter(t => !['the','and','with','for','from'].includes(t)) ?? [];
       const description = `${item.title ?? ''} ${item.description ?? ''} ${JSON.stringify(item.tags ?? [])}`.toLowerCase();
-      const words = description.match(/[a-z]+/g) ?? [];
+      const words: string[] = description.match(/[a-z]+/g) ?? [];
+      const forbidden: string[] = ['pregnant', 'pregnancy', 'newborn', 'baby', 'nursery', 'maternity'];
+      // A generic tag such as "toys" must not quietly turn into pregnancy or baby-room footage.
+      if (forbidden.some(word => words.includes(word)) && !tokens.some(token => forbidden.includes(token))) return [];
       const matches = tokens.filter(token => words.some(word => word === token || word.replace(/s$/, '') === token.replace(/s$/, '') || (token.length > 5 && word.startsWith(token.replace(/ing$/, ''))))).length;
       if (!tokens.length || matches < (tokens.length > 2 ? 2 : 1)) return [];
-    const url = item.urls?.mp4_download ?? item.urls?.mp4 ?? item.mp4_download;
-      return url ? [{ downloadUrl: url, extension: '.mp4', mimeType: 'video/mp4', originalName: item.title ? `${item.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')}.mp4` : `coverr-${item.id ?? randomUUID()}.mp4`, sourceProvider: 'coverr' as const, sourceUrl: `https://coverr.co/videos/${item.slug ?? item.id ?? ''}`, sourceLicense: 'Coverr License', tags: [scene.query] }] : [];
+      const url = item.urls?.mp4_download ?? item.urls?.mp4 ?? item.mp4_download;
+      return url ? [{ downloadUrl: url, previewUrl: item.urls?.mp4_preview ?? url, extension: '.mp4', mimeType: 'video/mp4', originalName: item.title ? `${item.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '')}.mp4` : `coverr-${item.id ?? randomUUID()}.mp4`, sourceProvider: 'coverr' as const, sourceUrl: `https://coverr.co/videos/${item.slug ?? item.id ?? ''}`, sourceLicense: 'Coverr License', tags: [scene.query] }] : [];
     });
   };
   return search(scene.query);
@@ -73,7 +77,7 @@ async function searchYandex(query: string, page: number): Promise<StockAsset[]> 
 }
 
 export async function downloadSelectedStock(asset: StockAsset, projectId: string, mediaRoot: string, db: Pool) {
-  const response = await fetch(asset.downloadUrl, { signal: AbortSignal.timeout(120_000) });
+  const response = await fetch(asset.downloadUrl, { headers: {'user-agent':'NewsVideoFactory/0.1'}, signal: AbortSignal.timeout(120_000) });
   if (!response.ok || !response.body) throw new Error(`cannot download ${asset.sourceProvider} media`);
   const id = randomUUID();
   const objectKey = join('stock', projectId, `${id}${asset.extension}`);
@@ -112,7 +116,8 @@ export async function searchRemoteMedia(text: string, keywords?: Keyword[], page
   // Limit network fanout to two topics at a time.
   for (let i=0;i<queries.length;i+=2) {
     const batch = await Promise.all(queries.slice(i,i+2).map(async k => {
-      const results = await Promise.allSettled([searchCoverr({query:k.query,kind:'video'},page),searchYandex(k.query,page)]);
+      // Russian label is sent to Russian image search; English translation is sent to Coverr.
+      const results = await Promise.allSettled([searchCoverr({query:k.query,kind:'video'},page),searchYandex(k.label,page)]);
       return results.flatMap((r,index) => {
         if (r.status === 'fulfilled') return r.value;
         warnings.push(`${index ? 'Яндекс' : 'Coverr'} · ${k.label}: ${r.reason instanceof Error ? r.reason.message : 'нет ответа'}`);
@@ -132,7 +137,7 @@ export async function searchRemoteMedia(text: string, keywords?: Keyword[], page
   const items = [...unique.values()].map(asset => {
     const id = randomUUID(); selections.set(id,asset);
     return {id, kind:asset.mimeType.startsWith('image/')?'photo' as const:'video' as const,
-      title:asset.originalName, previewUrl:asset.downloadUrl, provider:asset.sourceProvider, sourceUrl:asset.sourceUrl,
+      title:asset.originalName, previewUrl:asset.previewUrl ?? asset.downloadUrl, provider:asset.sourceProvider, sourceUrl:asset.sourceUrl,
       author:asset.sourceAuthor, license:asset.sourceLicense, query:asset.tags[0]};
   });
   const result = {items, warnings, hasMore:groups.some(g=>g.length>=12), expiresAt:Date.now()+3600000};
