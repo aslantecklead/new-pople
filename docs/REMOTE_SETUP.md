@@ -132,6 +132,8 @@ Invoke-RestMethod http://127.0.0.1:8080/health
 ## Текущее развёртывание
 
 Windows-сервер использует каталог `C:\Users\aleck\news-video-factory`, ветку
-`main` и Docker Compose. Обновление выполняется командами из раздела выше;
-данные PostgreSQL, Redis, медиафайлы и модели Ollama лежат в Docker volumes и
-не удаляются при `git pull` или пересборке `api` и `worker`.
+`main` и Docker Compose. На нём установлены Git, контейнеры `api`, `worker`,
+`postgres`, `redis`, `ollama` и модель `qwen2.5:3b`. Обновление выполняется
+командами из раздела выше; данные PostgreSQL, Redis, медиафайлы и модели Ollama
+лежат в Docker volumes и не удаляются при `git pull` или пересборке `api` и
+`worker`.
