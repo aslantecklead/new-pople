@@ -48,9 +48,11 @@ new Worker(
       const projectResult = await db.query<{ news_text: string }>('SELECT news_text FROM projects WHERE id = $1', [job.data.projectId]);
       const project = projectResult.rows[0];
       if (!project) throw new Error('project not found');
-      const attachedAssets = await db.query<{ object_key: string; mime_type: string }>(`SELECT DISTINCT a.object_key, a.mime_type FROM assets a
+      const attachedAssets = await db.query<{ object_key: string; mime_type: string }>(`SELECT a.object_key, a.mime_type FROM assets a
         LEFT JOIN project_assets pa ON pa.asset_id = a.id
-        WHERE a.project_id = $1 OR pa.project_id = $1 ORDER BY a.created_at LIMIT 6`, [job.data.projectId]);
+        WHERE a.project_id = $1 OR pa.project_id = $1
+        GROUP BY a.object_key, a.mime_type
+        ORDER BY MAX(a.created_at) LIMIT 6`, [job.data.projectId]);
       await setStage(jobId, 'storyboard');
       await job.updateProgress({ stage: 'storyboard' });
       const automaticAssets = attachedAssets.rows.length ? [] : await downloadAutomaticStock(project.news_text, job.data.projectId, mediaRoot, db);
