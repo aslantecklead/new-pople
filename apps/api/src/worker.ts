@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { Pool } from 'pg';
 import { connection } from './queue.js';
-import { downloadAutomaticStock } from './stock.js';
 
 const db = new Pool({ connectionString: process.env.DATABASE_URL });
 const stages = ['storyboard', 'footage-selection', 'voiceover', 'captions', 'render'] as const;
@@ -55,13 +54,16 @@ new Worker(
         ORDER BY MAX(a.created_at) LIMIT 6`, [job.data.projectId]);
       await setStage(jobId, 'storyboard');
       await job.updateProgress({ stage: 'storyboard' });
-      const automaticAssets = attachedAssets.rows.length ? [] : await downloadAutomaticStock(project.news_text, job.data.projectId, mediaRoot, db);
       const terms = searchTerms(project.news_text);
       const libraryAssets = terms.length ? await db.query<{ object_key: string; mime_type: string }>(
         `SELECT object_key, mime_type FROM assets WHERE project_id IS NULL AND tags::text ILIKE ANY($1::text[]) ORDER BY created_at LIMIT 6`,
         [terms.map((term) => `%${term}%`)],
       ) : { rows: [] };
-      const assets = attachedAssets.rows.length ? attachedAssets.rows : automaticAssets.length ? automaticAssets : libraryAssets.rows;
+      // The editor already selects remote material during step 2. Do not launch a
+      // second, invisible network search inside the renderer: slow providers used
+      // to leave a job stuck at “storyboard” for minutes. If nothing is selected,
+      // render a readable text card instead.
+      const assets = attachedAssets.rows.length ? attachedAssets.rows : libraryAssets.rows;
       const outputDir = join(mediaRoot, 'outputs');
       await mkdir(outputDir, { recursive: true });
 
